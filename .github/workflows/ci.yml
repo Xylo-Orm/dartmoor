@@ -1,0 +1,29 @@
+name: Rust native matrix
+on: [push, pull_request]
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux development libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libspa-0.2-dev libdbus-1-dev libclang-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo test --manifest-path vendor/scap/Cargo.toml --lib
+      - run: cargo build --locked --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumen-${{ runner.os }}
+          path: |
+            target/release/lumen-desktop
+            target/release/lumen-desktop.exe

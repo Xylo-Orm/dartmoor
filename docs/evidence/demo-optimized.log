@@ -1,0 +1,18 @@
+Running: 16 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Running: 31 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Running: 46 frames; sample 0.199 ms; SIMULATED desktop — no capture hardware verification
+Running: 61 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Running: 76 frames; sample 0.201 ms; SIMULATED desktop — no capture hardware verification
+Running: 91 frames; sample 0.206 ms; SIMULATED desktop — no capture hardware verification
+Running: 106 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Running: 120 frames; sample 0.200 ms; SIMULATED desktop — no capture hardware verification
+Running: 135 frames; sample 0.203 ms; SIMULATED desktop — no capture hardware verification
+Running: 150 frames; sample 0.202 ms; SIMULATED desktop — no capture hardware verification
+Running: 165 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Running: 180 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Running: 195 frames; sample 0.203 ms; SIMULATED desktop — no capture hardware verification
+Running: 210 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Running: 225 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Running: 240 frames; sample 0.198 ms; SIMULATED desktop — no capture hardware verification
+Final frames: 240
+{"command": ["target/release/lumen-desktop", "--demo-seconds", "8"], "exit": 0, "wall_seconds": 8.255, "user_seconds": 0.06360199999999999, "system_seconds": 0.0051259999999999995, "max_rss_mib": 13.8984375, "samples": [{"seconds": 0.0, "rss_mib": 0.18, "cpu_seconds": 0.0}, {"seconds": 0.25, "rss_mib": 6.12, "cpu_seconds": 0.0}, {"seconds": 0.5, "rss_mib": 6.12, "cpu_seconds": 0.0}, {"seconds": 0.75, "rss_mib": 6.31, "cpu_seconds": 0.0}, {"seconds": 1.0, "rss_mib": 6.31, "cpu_seconds": 0.0}, {"seconds": 1.25, "rss_mib": 6.31, "cpu_seconds": 0.01}, {"seconds": 1.5, "rss_mib": 6.31, "cpu_seconds": 0.01}, {"seconds": 1.75, "rss_mib": 6.31, "cpu_seconds": 0.01}, {"seconds": 2.0, "rss_mib": 6.31, "cpu_seconds": 0.01}, {"seconds": 2.25, "rss_mib": 6.31, "cpu_seconds": 0.01}, {"seconds": 2.5, "rss_mib": 6.31, "cpu_seconds": 0.01}, {"seconds": 2.75, "rss_mib": 6.31, "cpu_seconds": 0.02}, {"seconds": 3.0, "rss_mib": 6.31, "cpu_seconds": 0.02}, {"seconds": 3.25, "rss_mib": 6.31, "cpu_seconds": 0.02}, {"seconds": 3.5, "rss_mib": 6.31, "cpu_seconds": 0.02}, {"seconds": 3.75, "rss_mib": 6.31, "cpu_seconds": 0.03}, {"seconds": 4.0, "rss_mib": 6.31, "cpu_seconds": 0.03}, {"seconds": 4.25, "rss_mib": 6.31, "cpu_seconds": 0.03}, {"seconds": 4.5, "rss_mib": 6.31, "cpu_seconds": 0.03}, {"seconds": 4.75, "rss_mib": 6.31, "cpu_seconds": 0.03}, {"seconds": 5.0, "rss_mib": 6.31, "cpu_seconds": 0.03}, {"seconds": 5.25, "rss_mib": 6.31, "cpu_seconds": 0.04}, {"seconds": 5.5, "rss_mib": 6.31, "cpu_seconds": 0.04}, {"seconds": 5.75, "rss_mib": 6.31, "cpu_seconds": 0.04}, {"seconds": 6.0, "rss_mib": 6.31, "cpu_seconds": 0.04}, {"seconds": 6.25, "rss_mib": 6.31, "cpu_seconds": 0.05}, {"seconds": 6.5, "rss_mib": 6.31, "cpu_seconds": 0.05}, {"seconds": 6.75, "rss_mib": 6.31, "cpu_seconds": 0.05}, {"seconds": 7.0, "rss_mib": 6.31, "cpu_seconds": 0.05}, {"seconds": 7.25, "rss_mib": 6.31, "cpu_seconds": 0.05}, {"seconds": 7.51, "rss_mib": 6.31, "cpu_seconds": 0.05}, {"seconds": 7.76, "rss_mib": 6.31, "cpu_seconds": 0.06}, {"seconds": 8.01, "rss_mib": 6.31, "cpu_seconds": 0.06}]}

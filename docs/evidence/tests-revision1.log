@@ -1,0 +1,55 @@
+   Compiling lumen-desktop v0.1.0 (/home/florian/Projects/lumen-desktop)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.19s
+     Running unittests src/lib.rs (target/debug/deps/lumen_desktop-36b03b68939ed62f)
+
+running 35 tests
+test capture::tests::padded_or_truncated_rejected ... ok
+test config::tests::mac_spellings_and_host_aliases_share_overlap_validation ... ok
+test config::tests::same_host_cannot_claim_conflicting_controller_identities ... ok
+test config::tests::future_version_and_credentials_are_rejected ... ok
+test config::tests::overlapping_routes_are_rejected_but_adjacent_ranges_are_valid ... ok
+test config::tests::legacy_configs_default_to_no_wled_restoration ... ok
+test core::tests::smoothing_depends_on_elapsed_time ... ok
+test core::tests::averaging_occurs_in_linear_light_and_covers_whole_strip ... ok
+test core::tests::encoding_roundtrips_srgb ... ok
+test core::tests::geometry_and_capture_dimensions_are_bounded ... ok
+test core::tests::reversed_strip_reverses_zones ... ok
+test outputs::tests::ha_capabilities_convert_and_skip_white_only_unavailable ... ok
+test config::tests::loaded_ha_strips_must_sample_one_zone_covering_the_entire_path ... ok
+test outputs::tests::ha_rgbw_and_rgbww_use_native_arrays_and_disable_white_channels ... ok
+test outputs::tests::ddp_offsets_lengths_sequence_and_push ... ok
+test outputs::tests::ha_state_events_update_availability_without_invalidating_own_rgb_updates ... ok
+test config::tests::config_roundtrip_and_invalid_preservation ... ok
+test outputs::tests::urls_never_accept_embedded_secrets ... ok
+test outputs::tests::ddp_local_udp_receives_complete_rgb_frame ... ok
+test engine::tests::lost_capture_enters_error_not_idle_or_running ... ok
+test engine::tests::aliases_combine_into_one_physical_controller_frame ... ok
+test outputs::tests::wled_requires_verified_finite_device_timeout_without_changing_config ... ok
+test capture::tests::deterministic_synthetic ... ok
+test outputs::tests::ha_fake_server_auth_discovery_ack_and_rejected_call ... ok
+test config::tests::future_and_oversized_files_survive_recovery_save ... ok
+test outputs::tests::wled_failed_finite_reset_is_retried_by_cleanup_without_indefinite_acquisition ... ok
+test capture::tests::bgra_and_aspect ... ok
+test engine::tests::permission_failure_releases_session_and_recovers ... ok
+test outputs::tests::wled_refuses_frames_past_device_led_count_before_acquisition ... ok
+test outputs::tests::wled_stop_before_first_frame_never_acquires_live_mode ... ok
+test outputs::tests::wled_saved_identity_prevents_dhcp_reassignment_from_acquiring_live ... ok
+test engine::tests::start_stop_and_latest_preview ... ok
+test outputs::tests::wled_finite_ddp_keepalive_uses_latest_frame_then_stale_and_cancel_release ... ok
+test outputs::tests::ha_stream_coalesces_and_never_sends_stale_frames ... ok
+test outputs::tests::credential_lookup_is_off_executor_bounded_and_started_once ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.00s
+
+     Running unittests src/main.rs (target/debug/deps/lumen_desktop-faf0eb1f7b32af6e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lumen_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

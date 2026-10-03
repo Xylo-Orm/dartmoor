@@ -1,0 +1,62 @@
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+RequestingPermission: 0 frames; sample 0.000 ms; Waiting for screen capture permission / first frame
+Running: 6 frames; sample 0.261 ms; Synchronizing SDR/sRGB desktop
+Running: 34 frames; sample 0.300 ms; Synchronizing SDR/sRGB desktop
+Running: 64 frames; sample 0.208 ms; Synchronizing SDR/sRGB desktop
+Running: 94 frames; sample 0.199 ms; Synchronizing SDR/sRGB desktop
+Running: 124 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 153 frames; sample 0.205 ms; Synchronizing SDR/sRGB desktop
+Running: 183 frames; sample 0.233 ms; Synchronizing SDR/sRGB desktop
+Running: 213 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 242 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 272 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 301 frames; sample 0.207 ms; Synchronizing SDR/sRGB desktop
+Running: 332 frames; sample 0.200 ms; Synchronizing SDR/sRGB desktop
+Running: 362 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 391 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 421 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 449 frames; sample 0.204 ms; Synchronizing SDR/sRGB desktop
+Running: 479 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 509 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 538 frames; sample 0.205 ms; Synchronizing SDR/sRGB desktop
+Running: 568 frames; sample 0.199 ms; Synchronizing SDR/sRGB desktop
+Running: 598 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 627 frames; sample 0.198 ms; Synchronizing SDR/sRGB desktop
+Running: 657 frames; sample 0.207 ms; Synchronizing SDR/sRGB desktop
+Running: 687 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 716 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 745 frames; sample 0.199 ms; Synchronizing SDR/sRGB desktop
+Running: 775 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 804 frames; sample 0.199 ms; Synchronizing SDR/sRGB desktop
+Running: 834 frames; sample 0.200 ms; Synchronizing SDR/sRGB desktop
+Running: 863 frames; sample 0.199 ms; Synchronizing SDR/sRGB desktop
+Running: 893 frames; sample 0.205 ms; Synchronizing SDR/sRGB desktop
+Running: 923 frames; sample 0.205 ms; Synchronizing SDR/sRGB desktop
+Running: 953 frames; sample 0.211 ms; Synchronizing SDR/sRGB desktop
+Running: 983 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 1013 frames; sample 0.199 ms; Synchronizing SDR/sRGB desktop
+Running: 1042 frames; sample 0.207 ms; Synchronizing SDR/sRGB desktop
+Running: 1072 frames; sample 0.203 ms; Synchronizing SDR/sRGB desktop
+Running: 1102 frames; sample 0.207 ms; Synchronizing SDR/sRGB desktop
+Running: 1132 frames; sample 0.199 ms; Synchronizing SDR/sRGB desktop
+Running: 1162 frames; sample 0.199 ms; Synchronizing SDR/sRGB desktop
+Running: 1192 frames; sample 0.205 ms; Synchronizing SDR/sRGB desktop
+Final frames: 1192
+{"command": ["target/release/lumen-desktop", "--capture-probe", "30"], "exit": 0, "wall_seconds": 30.269, "user_seconds": 8.576222, "system_seconds": 0.026924999999999998, "max_rss_mib": 79.359375, "samples": [{"seconds": 0.0, "rss_mib": 0.0, "cpu_seconds": 0.0}, {"seconds": 0.25, "rss_mib": 6.62, "cpu_seconds": 0.0}, {"seconds": 0.5, "rss_mib": 6.62, "cpu_seconds": 0.0}, {"seconds": 0.75, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 1.0, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 1.25, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 1.5, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 1.75, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 2.0, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 2.25, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 2.5, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 2.75, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 3.0, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 3.25, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 3.5, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 3.75, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 4.0, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 4.25, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 4.5, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 4.75, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 5.0, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 5.25, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 5.5, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 5.75, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 6.0, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 6.25, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 6.5, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 6.75, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 7.0, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 7.25, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 7.5, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 7.75, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 8.0, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 8.25, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 8.51, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 8.76, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 9.01, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 9.26, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 9.51, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 9.76, "rss_mib": 6.8, "cpu_seconds": 0.0}, {"seconds": 10.01, "rss_mib": 79.36, "cpu_seconds": 0.04}, {"seconds": 10.26, "rss_mib": 79.36, "cpu_seconds": 0.16}, {"seconds": 10.51, "rss_mib": 79.36, "cpu_seconds": 0.28}, {"seconds": 10.76, "rss_mib": 79.36, "cpu_seconds": 0.39}, {"seconds": 11.01, "rss_mib": 79.36, "cpu_seconds": 0.5}, {"seconds": 11.26, "rss_mib": 79.36, "cpu_seconds": 0.61}, {"seconds": 11.51, "rss_mib": 79.36, "cpu_seconds": 0.72}, {"seconds": 11.76, "rss_mib": 79.36, "cpu_seconds": 0.82}, {"seconds": 12.01, "rss_mib": 79.36, "cpu_seconds": 0.93}, {"seconds": 12.26, "rss_mib": 79.36, "cpu_seconds": 1.04}, {"seconds": 12.51, "rss_mib": 79.36, "cpu_seconds": 1.14}, {"seconds": 12.76, "rss_mib": 79.36, "cpu_seconds": 1.25}, {"seconds": 13.01, "rss_mib": 79.36, "cpu_seconds": 1.36}, {"seconds": 13.26, "rss_mib": 79.36, "cpu_seconds": 1.46}, {"seconds": 13.51, "rss_mib": 79.36, "cpu_seconds": 1.57}, {"seconds": 13.76, "rss_mib": 79.36, "cpu_seconds": 1.68}, {"seconds": 14.01, "rss_mib": 79.36, "cpu_seconds": 1.78}, {"seconds": 14.26, "rss_mib": 79.36, "cpu_seconds": 1.89}, {"seconds": 14.51, "rss_mib": 79.36, "cpu_seconds": 2.0}, {"seconds": 14.76, "rss_mib": 79.36, "cpu_seconds": 2.1}, {"seconds": 15.01, "rss_mib": 79.36, "cpu_seconds": 2.21}, {"seconds": 15.26, "rss_mib": 79.36, "cpu_seconds": 2.31}, {"seconds": 15.51, "rss_mib": 79.36, "cpu_seconds": 2.42}, {"seconds": 15.76, "rss_mib": 79.36, "cpu_seconds": 2.53}, {"seconds": 16.01, "rss_mib": 79.36, "cpu_seconds": 2.64}, {"seconds": 16.26, "rss_mib": 79.36, "cpu_seconds": 2.75}, {"seconds": 16.51, "rss_mib": 79.36, "cpu_seconds": 2.85}, {"seconds": 16.76, "rss_mib": 79.36, "cpu_seconds": 2.95}, {"seconds": 17.01, "rss_mib": 79.36, "cpu_seconds": 3.06}, {"seconds": 17.26, "rss_mib": 79.36, "cpu_seconds": 3.17}, {"seconds": 17.51, "rss_mib": 79.36, "cpu_seconds": 3.27}, {"seconds": 17.76, "rss_mib": 79.36, "cpu_seconds": 3.37}, {"seconds": 18.01, "rss_mib": 79.36, "cpu_seconds": 3.48}, {"seconds": 18.26, "rss_mib": 79.36, "cpu_seconds": 3.59}, {"seconds": 18.51, "rss_mib": 79.36, "cpu_seconds": 3.69}, {"seconds": 18.76, "rss_mib": 79.36, "cpu_seconds": 3.8}, {"seconds": 19.01, "rss_mib": 79.36, "cpu_seconds": 3.9}, {"seconds": 19.26, "rss_mib": 79.36, "cpu_seconds": 4.01}, {"seconds": 19.51, "rss_mib": 79.36, "cpu_seconds": 4.11}, {"seconds": 19.76, "rss_mib": 79.36, "cpu_seconds": 4.22}, {"seconds": 20.01, "rss_mib": 79.36, "cpu_seconds": 4.33}, {"seconds": 20.26, "rss_mib": 79.36, "cpu_seconds": 4.44}, {"seconds": 20.51, "rss_mib": 79.36, "cpu_seconds": 4.53}, {"seconds": 20.76, "rss_mib": 79.36, "cpu_seconds": 4.64}, {"seconds": 21.01, "rss_mib": 79.36, "cpu_seconds": 4.75}, {"seconds": 21.26, "rss_mib": 79.36, "cpu_seconds": 4.85}, {"seconds": 21.51, "rss_mib": 79.36, "cpu_seconds": 4.96}, {"seconds": 21.76, "rss_mib": 79.36, "cpu_seconds": 5.06}, {"seconds": 22.01, "rss_mib": 79.36, "cpu_seconds": 5.17}, {"seconds": 22.26, "rss_mib": 79.36, "cpu_seconds": 5.27}, {"seconds": 22.51, "rss_mib": 79.36, "cpu_seconds": 5.38}, {"seconds": 22.76, "rss_mib": 79.36, "cpu_seconds": 5.49}, {"seconds": 23.01, "rss_mib": 79.36, "cpu_seconds": 5.59}, {"seconds": 23.26, "rss_mib": 79.36, "cpu_seconds": 5.69}, {"seconds": 23.51, "rss_mib": 79.36, "cpu_seconds": 5.8}, {"seconds": 23.76, "rss_mib": 79.36, "cpu_seconds": 5.9}, {"seconds": 24.02, "rss_mib": 79.36, "cpu_seconds": 6.01}, {"seconds": 24.27, "rss_mib": 79.36, "cpu_seconds": 6.12}, {"seconds": 24.52, "rss_mib": 79.36, "cpu_seconds": 6.22}, {"seconds": 24.77, "rss_mib": 79.36, "cpu_seconds": 6.32}, {"seconds": 25.02, "rss_mib": 79.36, "cpu_seconds": 6.44}, {"seconds": 25.27, "rss_mib": 79.36, "cpu_seconds": 6.54}, {"seconds": 25.52, "rss_mib": 79.36, "cpu_seconds": 6.65}, {"seconds": 25.77, "rss_mib": 79.36, "cpu_seconds": 6.76}, {"seconds": 26.02, "rss_mib": 79.36, "cpu_seconds": 6.87}, {"seconds": 26.27, "rss_mib": 79.36, "cpu_seconds": 6.98}, {"seconds": 26.52, "rss_mib": 79.36, "cpu_seconds": 7.09}, {"seconds": 26.77, "rss_mib": 79.36, "cpu_seconds": 7.19}, {"seconds": 27.02, "rss_mib": 79.36, "cpu_seconds": 7.3}, {"seconds": 27.27, "rss_mib": 79.36, "cpu_seconds": 7.39}, {"seconds": 27.52, "rss_mib": 79.36, "cpu_seconds": 7.5}, {"seconds": 27.77, "rss_mib": 79.36, "cpu_seconds": 7.61}, {"seconds": 28.02, "rss_mib": 79.36, "cpu_seconds": 7.71}, {"seconds": 28.27, "rss_mib": 79.36, "cpu_seconds": 7.82}, {"seconds": 28.52, "rss_mib": 79.36, "cpu_seconds": 7.93}, {"seconds": 28.77, "rss_mib": 79.36, "cpu_seconds": 8.04}, {"seconds": 29.02, "rss_mib": 79.36, "cpu_seconds": 8.14}, {"seconds": 29.27, "rss_mib": 79.36, "cpu_seconds": 8.25}, {"seconds": 29.52, "rss_mib": 79.36, "cpu_seconds": 8.35}, {"seconds": 29.77, "rss_mib": 79.36, "cpu_seconds": 8.46}, {"seconds": 30.02, "rss_mib": 79.36, "cpu_seconds": 8.57}]}

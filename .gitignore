@@ -1,0 +1,5 @@
+/target
+*.log
+!docs/evidence/*.log
+/vendor/scap/target
+/vendor/scap/Cargo.lock
