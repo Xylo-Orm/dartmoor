@@ -1,0 +1,15 @@
+    Checking scap v0.0.8 (/home/florian/Projects/dartmoor/vendor/scap)
+src/capturer/engine/linux/portal.rs:45:9: error: using `Result.and_then(|x| Ok(y))`, which is more succinctly expressed as `map(|x| y)`
+src/capturer/engine/linux/portal.rs:58:9: error: using `Result.and_then(|x| Ok(y))`, which is more succinctly expressed as `map(|x| y)`
+src/capturer/engine/linux/portal.rs:72:9: error: using `Result.and_then(|x| Ok(y))`, which is more succinctly expressed as `map(|x| y)`
+src/capturer/engine/linux/portal.rs:85:9: error: using `Result.and_then(|x| Ok(y))`, which is more succinctly expressed as `map(|x| y)`
+src/capturer/engine/linux/portal.rs:95:13: error: this expression creates a reference which is immediately dereferenced by the compiler: help: change this to: `self`
+src/capturer/engine/linux/portal.rs:103:13: error: this expression creates a reference which is immediately dereferenced by the compiler: help: change this to: `self`
+src/capturer/engine/linux/portal.rs:270:26: error: useless conversion to the same type: `dbus::Path<'_>`: help: consider removing `dbus::Path::from()`: `path`
+src/capturer/engine/linux/mod.rs:93:5: error: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`
+src/capturer/engine/mod.rs:64:9: error: unneeded `return` statement
+src/capturer/engine/mod.rs:116:13: error: unneeded `return` statement
+src/capturer/engine/mod.rs:114:48: error: this expression creates a reference which is immediately dereferenced by the compiler: help: change this to: `options`
+error: could not compile `scap` (lib) due to 11 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `scap` (lib test) due to 11 previous errors

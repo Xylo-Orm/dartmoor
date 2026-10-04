@@ -12,6 +12,7 @@ pub type CFDictionaryRef = *const __CFDictionary;
 pub type CFTypeRef = *const ::std::os::raw::c_void;
 pub type CFIndex = ::std::os::raw::c_long;
 pub type CFNumberType = CFIndex;
+pub type CFTypeID = usize;
 pub type Boolean = ::std::os::raw::c_uchar;
 
 #[repr(C)]
@@ -30,6 +31,9 @@ pub struct NSString(pub id);
 pub type CFNumberRef = *const __CFNumber;
 pub type SCStreamFrameInfo = NSString;
 extern "C" {
+    pub fn CFGetTypeID(cf: CFTypeRef) -> CFTypeID;
+    pub fn CFDictionaryGetTypeID() -> CFTypeID;
+    pub fn CFNumberGetTypeID() -> CFTypeID;
     pub fn CFDictionaryGetValue(
         theDict: CFDictionaryRef,
         key: *const ::std::os::raw::c_void,
@@ -43,6 +47,3 @@ extern "C" {
     pub static SCStreamFrameInfoStatus: SCStreamFrameInfo;
 }
 pub const CFNumberType_kCFNumberSInt64Type: CFNumberType = 4;
-pub type NSInteger = ::std::os::raw::c_long;
-pub type SCFrameStatus = NSInteger;
-pub const SCFrameStatus_SCFrameStatusComplete: SCFrameStatus = 0;

@@ -14,7 +14,7 @@ use std::{
 };
 
 pub const CONFIG_VERSION: u32 = 1;
-const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -109,6 +109,54 @@ impl Config {
     }
 }
 
+/// Clipboard/file interchange uses the same credential-free schema as persistence.
+pub(crate) fn encode_layout(config: &Config) -> Result<String> {
+    config.validate()?;
+    let json = serde_json::to_string_pretty(config).context("serialize configuration")?;
+    ensure!(
+        json.len() as u64 <= MAX_CONFIG_BYTES,
+        "configuration exceeds 1 MiB"
+    );
+    Ok(json)
+}
+
+pub(crate) fn decode_layout(json: &str) -> Result<Config> {
+    decode_layout_bytes(json.as_bytes())
+}
+
+fn decode_layout_bytes(bytes: &[u8]) -> Result<Config> {
+    // Check bytes before invoking serde, including malformed and multibyte input.
+    ensure!(
+        bytes.len() as u64 <= MAX_CONFIG_BYTES,
+        "configuration exceeds 1 MiB"
+    );
+    let config: Config = serde_json::from_slice(bytes).context("invalid configuration JSON")?;
+    // Serde's tagged unit variants ignore extra fields even with deny_unknown_fields.
+    // Keep the strict struct deserialization above (including duplicate-field checks),
+    // then inspect these two unit variants so imports cannot silently discard secrets.
+    let json: serde_json::Value = serde_json::from_slice(bytes)?;
+    if matches!(config.source, CaptureSelection::Synthetic) {
+        ensure!(
+            json["source"]
+                .as_object()
+                .is_some_and(|source| source.len() == 1),
+            "invalid configuration JSON: unknown fields in synthetic source"
+        );
+    }
+    for (index, light) in config.lights.iter().enumerate() {
+        if matches!(light.route, Route::Mock) {
+            ensure!(
+                json["lights"][index]["route"]
+                    .as_object()
+                    .is_some_and(|route| route.len() == 1),
+                "invalid configuration JSON: unknown fields in mock route"
+            );
+        }
+    }
+    config.validate()?;
+    Ok(config)
+}
+
 pub fn path() -> PathBuf {
     ProjectDirs::from("org", "Lumen", "lumen-desktop")
         .map(|dirs| dirs.config_dir().join("config.json"))
@@ -148,26 +196,15 @@ fn read_config(path: &Path) -> Result<Config> {
     );
     let mut bytes = Vec::new();
     file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() as u64 <= MAX_CONFIG_BYTES,
-        "configuration exceeds 1 MiB"
-    );
-    let config: Config = serde_json::from_slice(&bytes).context("invalid configuration JSON")?;
-    config.validate()?;
-    Ok(config)
+    decode_layout_bytes(&bytes)
 }
 
 pub fn save(config: &Config) -> Result<()> {
     save_to(config, &path())
 }
 
-fn save_to(config: &Config, path: &Path) -> Result<()> {
-    config.validate()?;
-    let bytes = serde_json::to_vec_pretty(config).context("serialize configuration")?;
-    ensure!(
-        bytes.len() as u64 <= MAX_CONFIG_BYTES,
-        "configuration exceeds 1 MiB"
-    );
+pub(crate) fn save_to(config: &Config, path: &Path) -> Result<()> {
+    let json = encode_layout(config)?;
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -175,7 +212,7 @@ fn save_to(config: &Config, path: &Path) -> Result<()> {
     fs::create_dir_all(parent).context("create configuration directory")?;
     let mut temporary =
         tempfile::NamedTempFile::new_in(parent).context("create temporary configuration")?;
-    temporary.write_all(&bytes)?;
+    temporary.write_all(json.as_bytes())?;
     temporary.write_all(b"\n")?;
     temporary.as_file().sync_all()?;
     backup_invalid_config(path, parent)?;
@@ -191,7 +228,7 @@ fn save_to(config: &Config, path: &Path) -> Result<()> {
 }
 
 /// Keep existing invalid files even when the user saves recovered demo defaults.
-/// Validation reads at most 1 MiB; oversized originals are streamed to the backup.
+/// Validation uses a bounded read; oversized originals are streamed to the backup.
 fn backup_invalid_config(path: &Path, parent: &Path) -> Result<()> {
     let mut original = match fs::File::open(path) {
         Ok(file) => file,
@@ -202,9 +239,7 @@ fn backup_invalid_config(path: &Path, parent: &Path) -> Result<()> {
     (&mut original)
         .take(MAX_CONFIG_BYTES + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 <= MAX_CONFIG_BYTES
-        && serde_json::from_slice::<Config>(&bytes).is_ok_and(|config| config.validate().is_ok())
-    {
+    if decode_layout_bytes(&bytes).is_ok() {
         return Ok(());
     }
     original.rewind()?;
@@ -230,6 +265,122 @@ fn backup_invalid_config(path: &Path, parent: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_interchange_roundtrips_unicode_and_pretty_json() {
+        let mut config = Config::default();
+        config.lights[0].name = "Schreibtisch 🌈 東京".into();
+        config.source = CaptureSelection::Desktop {
+            id: Some("Anzeige-東京".into()),
+        };
+        config.restore_wled_state = true;
+        let json = encode_layout(&config).unwrap();
+        assert!(json.contains("Schreibtisch 🌈 東京"));
+        assert!(json.contains("\n  \"version\""));
+        assert_eq!(decode_layout(&json).unwrap(), config);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        fs::write(&path, &json).unwrap();
+        assert_eq!(read_config(&path).unwrap(), config);
+        save_to(&config, &path).unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), format!("{json}\n"));
+    }
+
+    #[test]
+    fn layout_export_rejects_invalid_current_configuration() {
+        let mut config = Config {
+            fps: 0,
+            ..Config::default()
+        };
+        assert!(encode_layout(&config).is_err());
+        config.fps = 30;
+        config.brightness = f32::NAN;
+        assert!(encode_layout(&config).is_err());
+        config.brightness = 0.7;
+        config.ha_url = "https://user:secret@example.com".into();
+        assert!(encode_layout(&config).is_err());
+    }
+
+    #[test]
+    fn layout_import_rejects_unknown_credentials_and_unsupported_versions() {
+        let valid = serde_json::to_value(Config::default()).unwrap();
+        for secret_field in ["ha_token", "password", "credentials"] {
+            let mut json = valid.clone();
+            json[secret_field] = serde_json::json!("secret");
+            assert!(decode_layout(&json.to_string()).is_err());
+        }
+        let mut nested_secret = valid.clone();
+        nested_secret["lights"][0]["route"]["token"] = serde_json::json!("secret");
+        assert!(decode_layout(&nested_secret.to_string()).is_err());
+        let mut synthetic_secret = valid.clone();
+        synthetic_secret["source"]["token"] = serde_json::json!("secret");
+        assert!(decode_layout(&synthetic_secret.to_string()).is_err());
+        for version in [0, CONFIG_VERSION + 1] {
+            let mut json = valid.clone();
+            json["version"] = serde_json::json!(version);
+            let error = decode_layout(&json.to_string()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported configuration version")
+            );
+        }
+        let mut embedded_credentials = valid;
+        embedded_credentials["ha_url"] = serde_json::json!("https://user:secret@example.com");
+        assert!(decode_layout(&embedded_credentials.to_string()).is_err());
+    }
+
+    #[test]
+    fn layout_import_validates_routes_before_returning_a_configuration() {
+        let mut config = Config::default();
+        config.lights[0].route = Route::HomeAssistant {
+            entity_id: "light.desk".into(),
+        };
+        assert!(decode_layout(&serde_json::to_string(&config).unwrap()).is_err());
+        config.lights[0].zones = 1;
+        assert!(decode_layout(&serde_json::to_string(&config).unwrap()).is_ok());
+        config.lights[0].route = Route::Wled {
+            host: "desk.local".into(),
+            start: 0,
+            count: 20,
+            device_id: "AA:BB:CC:DD:EE:FF".into(),
+        };
+        let mut duplicate = config.lights[0].clone();
+        duplicate.id = "duplicate-route".into();
+        duplicate.route = Route::Wled {
+            host: "192.168.1.2".into(),
+            start: 19,
+            count: 20,
+            device_id: "aabbccddeeff".into(),
+        };
+        config.lights.push(duplicate);
+        assert!(decode_layout(&serde_json::to_string(&config).unwrap()).is_err());
+    }
+
+    #[test]
+    fn layout_import_enforces_byte_limit_before_parsing() {
+        let mut exactly_at_limit = encode_layout(&Config::default()).unwrap();
+        exactly_at_limit.push_str(&" ".repeat(MAX_CONFIG_BYTES as usize - exactly_at_limit.len()));
+        assert_eq!(decode_layout(&exactly_at_limit).unwrap(), Config::default());
+        exactly_at_limit.push(' ');
+        assert_eq!(
+            decode_layout(&exactly_at_limit).unwrap_err().to_string(),
+            "configuration exceeds 1 MiB"
+        );
+        let malformed = "{".repeat(MAX_CONFIG_BYTES as usize + 1);
+        assert_eq!(
+            decode_layout(&malformed).unwrap_err().to_string(),
+            "configuration exceeds 1 MiB"
+        );
+        let multibyte = "🌈".repeat(MAX_CONFIG_BYTES as usize / 4 + 1);
+        assert!(multibyte.chars().count() < MAX_CONFIG_BYTES as usize);
+        assert_eq!(
+            decode_layout(&multibyte).unwrap_err().to_string(),
+            "configuration exceeds 1 MiB"
+        );
+    }
+
     #[test]
     fn config_roundtrip_and_invalid_preservation() {
         let directory = tempfile::tempdir().unwrap();

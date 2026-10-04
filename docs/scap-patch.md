@@ -8,15 +8,20 @@ ScreenCaptureKit, Windows Graphics Capture, and portal/PipeWire backends.
 
 ## Changes
 
-- All three backends use a one-slot synchronous frame channel. Native callbacks
-  call `try_send`; when occupied the incoming frame is discarded. This bounds
-  backlog and never blocks a native callback on the application.
+- Linux/Windows use a one-slot synchronous frame channel. Native callbacks
+  call `try_send`; when occupied the incoming frame is discarded. macOS uses
+  a one-slot overwrite mailbox: new images replace older samples, and Idle
+  notifications cannot replace a pending image or invalidation. Native sample
+  destruction happens outside its short mutex section. No callback waits for
+  queue capacity or converts pixels; the worker owns conversion. Backlog is bounded.
 - `Capturer::get_next_frame_timeout(Duration)` returns
   `Result<Option<Frame>, std::sync::mpsc::RecvTimeoutError>`. An elapsed timeout
   returns `Ok(None)`; producer disconnection returns `Err(Disconnected)`.
-  It checks the queued frame once for a newer arrival, without indefinitely
-  draining an active producer, and applies one deadline across skipped macOS
-  samples. The original blocking API remains available.
+  Linux/Windows check the queued frame once for a newer arrival, without
+  indefinitely draining an active producer. macOS takes the mailbox's selected
+  sample without draining a later Idle over it. One deadline applies across
+  skipped samples. Native macOS errors also end ordinary and timed reads.
+  The original blocking API remains available.
 - Engine start/stop is guarded; dropping an engine stops an active capture.
   Windows stop accepts an already stopped capture. Linux also stops and joins
   its worker when dropped before it has ever started. A stopped Linux capturer
@@ -45,6 +50,19 @@ ScreenCaptureKit, Windows Graphics Capture, and portal/PipeWire backends.
   applies. The native format is always BGRA to match the emitted frame variant.
   `BGR0` in scap's macOS backend contains three bytes per pixel after alpha
   removal, despite its variant name.
+- macOS sample conversion propagates missing/invalid pixel buffers instead of
+  unwrapping conversion failures. A guard unlocks each successfully locked
+  CoreVideo buffer, including early error returns. Active converters reject
+  null pointers, failed locks, invalid dimensions/strides and length overflow.
+  ScreenCaptureKit Idle samples retain their zero-sized BGRA marker; the
+  application treats only this exact marker as confirmed unchanged-image
+  liveness. Raw status metadata must contain a dictionary and numeric, known
+  status; the wrapper's missing-metadata default of Idle is not trusted.
+  Failed conversion and invalid/missing/blank/suspended/stopped statuses
+  invalidate cached-image reuse until a valid image arrives. A timeout is
+  still silence. These changes were inspected against
+  local CoreVideo bindings and Apple documentation; their macOS compilation
+  and runtime have not been tested in this local increment.
 - The Linux dependency is `pipewire` 0.10.1 (Rust 1.80 minimum) with corresponding
   ownership/timeout API changes. The original 0.8 bindings fail against this
   machine's PipeWire 1.6.8 headers: generated `spa_pod_builder` is opaque while
@@ -58,9 +76,14 @@ On Linux with PipeWire 1.6.8:
 cargo test --manifest-path vendor/scap/Cargo.toml --lib
 ```
 
-Five tests pass, including the two new layout tests covering an offset plus row
-padding, truncated chunks, out-of-map offsets, short/negative strides, overflow,
-and empty dimensions. `cargo check --locked --offline -p scap --target x86_64-pc-windows-gnu`
+Eighteen tests pass: five existing image/layout helper tests plus thirteen
+shared mailbox/frame-state tests compiled on Linux. They cover priority/latest
+delivery, image and invalidation protection against Idle, timeout/disconnection,
+waiter wakeups, safe sample destruction and cached-image eligibility. Image tests
+cover an offset plus row padding, truncated chunks, out-of-map offsets,
+short/negative strides, overflow and empty dimensions. These shared tests do not
+compile or run macOS framework calls. Historically,
+`cargo check --locked --offline -p scap --target x86_64-pc-windows-gnu`
 also passes from Linux against locked `windows-capture` 1.5.0. Linux
 `cargo check -p scap` and `cargo clippy -p scap -- -D warnings` pass without
 warnings. Full application cross-compilation additionally needs a Windows C
@@ -79,5 +102,6 @@ Linux options such as explicit target/crop/output resolution remain limited by
 scap's implementation; selection is delegated to the portal. Other native
 construction/start paths can still panic; callers should contain those failures
 at their worker boundary. Backend stop errors are best effort during teardown.
-A one-slot drop-on-full channel bounds memory, but an occupied slot retains the
-older frame until consumed; this is not an overwrite mailbox.
+Linux/Windows one-slot drop-on-full channels bound memory, but an occupied slot
+retains the older frame until consumed. Their next-frame draining mitigates this
+when another image arrives; they do not currently provide explicit Idle liveness.

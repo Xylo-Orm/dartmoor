@@ -1,0 +1,6 @@
+broad: compile 220.658ms
+broad: sample 0.294ms/frame (120 iterations)
+VmHWM:	    6172 kB
+VmRSS:	    6172 kB
+broad: output 8 lights / 2048 zones, checksum 1275.713808
+{"command": ["target/release/examples/sampling_stress", "broad"], "exit": 0, "wall_seconds": 0.5, "user_seconds": 0.257668, "system_seconds": 0.000998, "max_rss_mib": 13.984375, "samples": [{"seconds": 0.0, "rss_mib": 0.0, "cpu_seconds": 0.0}, {"seconds": 0.25, "rss_mib": 5.78, "cpu_seconds": 0.24}]}

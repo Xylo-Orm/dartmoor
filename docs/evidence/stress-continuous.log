@@ -1,0 +1,49 @@
+Independent architecture reviewer synthetic resource/history probe, 2026-10-04.
+Source: docs/evidence/continuous-architecture-probe.rs
+Toolchain: rustc 1.96.0 (ac68faa20 2026-05-25), x86_64-unknown-linux-gnu,
+LLVM 22.1.2. Same Linux host as docs/VERIFICATION.md.
+
+Commands, run from the repository root:
+cargo build --offline --locked --release
+rustc --edition=2024 -O /tmp/continuous-architecture-probe.rs --extern lumen_desktop=target/release/deps/liblumen_desktop-edcbcf0f5242ad41.rlib -L dependency=target/release/deps -o /tmp/continuous-architecture-probe
+/tmp/continuous-architecture-probe
+
+The probe source has been preserved in docs/evidence. The library hash identifies
+the local release build configuration; Cargo replaced its contents after the
+Uniform bulb-region fix. The probe was relinked for the post-fix measurement.
+Outputs below preserve the reviewer's tool results; tab indentation is normalized.
+RSS/HWM includes the complete probe process (including the preceding history
+oracle), not only SamplingPlan. Sampling times use three iterations and exclude
+screen capture, editor/native-window rendering, smoothing and physical/network
+outputs. The resource workload is an intentionally extreme but valid synthetic
+64-bulb, 2,048-zone, radius-1.0 layout. It is not a general performance claim.
+
+Before the bulb-region optimization:
+Reviewer history oracle: 10,000 operations passed; edits/undo/redo=[3327, 3292, 3381]
+Reviewer synthetic stress: 64 bulbs / 2048 zones / radius 1.0; compile 122.84 ms; sample 30.06 ms/frame
+VmHWM:    464192 kB
+VmRSS:    464192 kB
+
+After the bulb-region optimization:
+Reviewer history oracle: 10,000 operations passed; edits/undo/redo=[3327, 3292, 3381]
+Reviewer synthetic stress: 64 bulbs / 2048 zones / radius 1.0; compile 6.94 ms; sample 1.47 ms/frame
+VmHWM:     18052 kB
+VmRSS:     18052 kB
+
+The independent deque oracle checks checkpoint/Undo/Redo equality, redo
+invalidation, count-cap eviction, availability flags, retained-history byte
+budget and resulting Config validity throughout its seeded operation sequence.
+The stress probe checks returned light/zone cardinality and equality of every
+zone within each sampled bulb. It does not exercise native platform adapters.
+
+Final frozen-implementation rerun, after the macOS mailbox/status integration:
+rustc --edition=2024 -O docs/evidence/continuous-architecture-probe.rs --extern lumen_desktop=target/release/deps/liblumen_desktop-edcbcf0f5242ad41.rlib -L dependency=target/release/deps -o /tmp/continuous-architecture-probe
+/tmp/continuous-architecture-probe
+Reviewer history oracle: 10,000 operations passed; edits/undo/redo=[3327, 3292, 3381]
+Reviewer synthetic stress: 64 bulbs / 2048 zones / radius 1.0; compile 9.88 ms; sample 1.04 ms/frame
+VmHWM:     18088 kB
+VmRSS:     18088 kB
+
+This repeated synthetic measurement illustrates timing variability; no native
+macOS code executes in this Linux probe. The final full application suite passed
+88 tests, and the independently rerun vendor library suite passed 18 tests.

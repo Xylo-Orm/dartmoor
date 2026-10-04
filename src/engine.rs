@@ -71,9 +71,14 @@ impl Engine {
         }
     }
     pub fn send(&self, cmd: Command) -> anyhow::Result<()> {
-        self.commands
-            .try_send(cmd)
-            .map_err(|_| anyhow::anyhow!("Engine is busy. Retry this action."))
+        self.commands.try_send(cmd).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => {
+                anyhow::anyhow!("Engine is busy. Retry this action.")
+            }
+            mpsc::error::TrySendError::Closed(_) => {
+                anyhow::anyhow!("Engine has stopped. Restart the application.")
+            }
+        })
     }
     pub async fn shutdown(mut self) {
         let completed = tokio::time::timeout(Duration::from_secs(10), async {
@@ -232,6 +237,15 @@ type CaptureFactory = Arc<
         + Send
         + Sync,
 >;
+type WorkerTask = Box<dyn FnOnce() + Send>;
+type WorkerSpawner =
+    Arc<dyn Fn(WorkerTask) -> std::io::Result<thread::JoinHandle<()>> + Send + Sync>;
+
+fn spawn_capture_thread(task: WorkerTask) -> std::io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("capture-sampling".into())
+        .spawn(task)
+}
 fn wled_routes(c: &Config) -> BTreeMap<String, (String, String)> {
     let mut routes = BTreeMap::new();
     for light in &c.lights {
@@ -274,6 +288,47 @@ fn route_colors(p: &Processed) -> (BTreeMap<String, RgbFrame>, HaColors) {
     }
     (pixels, ha)
 }
+/// Only an image or an explicit unchanged-image notification proves capture is
+/// alive. A timeout never refreshes this deadline or republishes cached colors.
+struct CaptureProgress {
+    last_activity: Instant,
+    image: Option<Arc<Frame>>,
+}
+impl CaptureProgress {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_activity: now,
+            image: None,
+        }
+    }
+
+    fn observe(
+        &mut self,
+        frame: Option<Frame>,
+        idle: bool,
+        now: Instant,
+    ) -> anyhow::Result<Option<Arc<Frame>>> {
+        let gap = now.saturating_duration_since(self.last_activity);
+        if frame.is_none() && !idle {
+            if gap > Duration::from_secs(2) {
+                anyhow::bail!(
+                    "Capture stopped delivering frames. Synchronization stopped for safety; select the source and Start again."
+                );
+            }
+            return Ok(None);
+        }
+        if gap > Duration::from_secs(5) {
+            anyhow::bail!("Desktop resumed after interruption. Start again to reacquire capture.");
+        }
+        self.last_activity = now;
+        if let Some(frame) = frame {
+            self.image = Some(Arc::new(frame));
+        }
+        // Idle before the first image proves liveness but cannot provide colors.
+        Ok(self.image.clone())
+    }
+}
+
 fn process_capture(
     mut config: watch::Receiver<Arc<Config>>,
     stop: &AtomicBool,
@@ -290,10 +345,10 @@ fn process_capture(
     let mut dimensions = (0, 0);
     let mut previous = vec![];
     let mut count = 0;
-    let mut last_frame = Instant::now();
-    let mut last_sample = last_frame;
+    let mut last_sample = Instant::now();
+    let mut progress = CaptureProgress::new(last_sample);
     let interval = Duration::from_secs_f64(1.0 / active.fps as f64);
-    let mut next = last_frame;
+    let mut next = last_sample;
     while !stop.load(Ordering::Relaxed) {
         let updated = config.borrow_and_update().clone();
         if !Arc::ptr_eq(&active, &updated) {
@@ -303,22 +358,15 @@ fn process_capture(
             }
             active = updated;
         }
-        let Some(frame) = source.0.next_frame(Duration::from_millis(100))? else {
-            if last_frame.elapsed() > Duration::from_secs(2) && !source.0.confirms_idle() {
-                anyhow::bail!(
-                    "Capture stopped delivering frames. Synchronization stopped for safety; select the source and Start again."
-                );
-            }
-            continue;
-        };
+        let frame = source.0.next_frame(Duration::from_millis(100))?;
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        if last_frame.elapsed() > Duration::from_secs(5) {
-            anyhow::bail!("Desktop resumed after interruption. Start again to reacquire capture.");
-        }
         let processing_started = Instant::now();
-        last_frame = processing_started;
+        let Some(frame) = progress.observe(frame, source.0.confirms_idle(), processing_started)?
+        else {
+            continue;
+        };
         if dimensions != (frame.width, frame.height) {
             dimensions = (frame.width, frame.height);
             plan = None;
@@ -352,7 +400,7 @@ fn process_capture(
         frames.send_replace(Some(Arc::new(Processed {
             session,
             config: active.clone(),
-            frame: Arc::new(frame),
+            frame,
             colors,
             frames: count,
             ms,
@@ -383,24 +431,30 @@ fn worker(
     events: mpsc::Sender<Event>,
     session: u64,
     opener: CaptureFactory,
-) -> Worker {
+    spawner: &WorkerSpawner,
+) -> anyhow::Result<Worker> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_rx = stop.clone();
     let (config, receiver) = watch::channel(c);
-    let thread=thread::Builder::new().name("capture-sampling".into()).spawn(move || {
-        let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||process_capture(receiver,&stop_rx,frames,session,opener)));
-        let error=match result {
-            Ok(Ok(()))=>None,
-            Ok(Err(e))=>Some(e.to_string()),
-            Err(_)=>Some("Capture backend failed. Cancel the permission dialog, check recording permissions and Start again.".into()),
+    let thread = spawner(Box::new(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_capture(receiver, &stop_rx, frames, session, opener)
+        }));
+        let error = match result {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e.to_string()),
+            Err(_) => Some("Capture backend failed. Cancel the permission dialog, check recording permissions and Start again.".into()),
         };
-        if let Some(e)=error {let _=events.blocking_send(Event::Failed(session,e));}
-    }).expect("spawn capture worker");
-    Worker {
+        if let Some(error) = error {
+            let _ = events.blocking_send(Event::Failed(session, error));
+        }
+    }))
+    .map_err(|error| anyhow::anyhow!("Could not start capture worker: {error}. Close unused applications and Start again."))?;
+    Ok(Worker {
         stop,
         thread: Some(thread),
         config,
-    }
+    })
 }
 fn same_geometry(a: &Config, b: &Config) -> bool {
     a.lights.len() == b.lights.len()
@@ -426,9 +480,18 @@ async fn run(commands: mpsc::Receiver<Command>, snapshots: watch::Sender<Snapsho
 }
 
 async fn run_with_factory(
+    commands: mpsc::Receiver<Command>,
+    snapshots: watch::Sender<Snapshot>,
+    opener: CaptureFactory,
+) {
+    run_with_spawner(commands, snapshots, opener, Arc::new(spawn_capture_thread)).await;
+}
+
+async fn run_with_spawner(
     mut commands: mpsc::Receiver<Command>,
     snapshots: watch::Sender<Snapshot>,
     opener: CaptureFactory,
+    spawner: WorkerSpawner,
 ) {
     let (frames_tx, mut frames) = watch::channel(None::<Arc<Processed>>);
     let (events_tx, mut events) = mpsc::channel(8);
@@ -472,16 +535,28 @@ async fn run_with_factory(
                             status.state = SessionState::RequestingPermission;
                             status.message =
                                 "Waiting for screen capture permission / first frame".into();
-                            outputs = Some(OutputGroup::start(&c));
                             session += 1;
-                            worker_state = Some(worker(
+                            match worker(
                                 c.clone(),
                                 frames_tx.clone(),
                                 events_tx.clone(),
                                 session,
                                 opener.clone(),
-                            ));
-                            active = Some(c);
+                                &spawner,
+                            ) {
+                                Ok(worker) => {
+                                    // Do not acquire outputs until thread creation
+                                    // succeeds; a spawn failure owns no resources.
+                                    worker_state = Some(worker);
+                                    outputs = Some(OutputGroup::start(&c));
+                                    active = Some(c);
+                                }
+                                Err(error) => {
+                                    status.state = SessionState::Error;
+                                    status.message = error.to_string();
+                                    status.devices.clear();
+                                }
+                            }
                         }
                     }
                     Some(Command::Apply(c)) => {
@@ -582,6 +657,141 @@ async fn run_with_factory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn solid_frame() -> Frame {
+        Frame {
+            width: 2,
+            height: 2,
+            pixels: vec![[255, 0, 0]; 4],
+        }
+    }
+
+    #[test]
+    fn explicit_idle_refreshes_capture_but_silence_does_not_replay() {
+        let start = Instant::now();
+        let mut capture = CaptureProgress::new(start);
+        let image = capture
+            .observe(Some(solid_frame()), false, start)
+            .unwrap()
+            .unwrap();
+        // Keep an unchanged desktop healthy well beyond the old 2s stall and
+        // 5s resume thresholds, without inventing activity between notifications.
+        for second in 1..=12 {
+            let unchanged = capture
+                .observe(None, true, start + Duration::from_secs(second))
+                .unwrap()
+                .unwrap();
+            assert!(Arc::ptr_eq(&image, &unchanged));
+        }
+        assert!(
+            capture
+                .observe(None, false, start + Duration::from_secs(13))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            capture
+                .observe(None, false, start + Duration::from_secs(14))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            capture
+                .observe(None, false, start + Duration::from_millis(14001))
+                .unwrap_err()
+                .to_string()
+                .contains("stopped delivering")
+        );
+    }
+
+    #[test]
+    fn idle_requires_an_image_and_cannot_hide_a_long_interruption() {
+        let start = Instant::now();
+        let mut capture = CaptureProgress::new(start);
+        assert!(
+            capture
+                .observe(None, true, start + Duration::from_secs(1))
+                .unwrap()
+                .is_none()
+        );
+        let image = capture
+            .observe(Some(solid_frame()), false, start + Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(image.pixels[0], [255, 0, 0]);
+        for idle in [false, true] {
+            let mut interrupted = CaptureProgress::new(start);
+            interrupted
+                .observe(Some(solid_frame()), false, start)
+                .unwrap();
+            let next = (!idle).then(solid_frame);
+            assert!(
+                interrupted
+                    .observe(next, idle, start + Duration::from_secs(6))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("interruption")
+            );
+        }
+    }
+
+    struct FrameThenIdle {
+        calls: usize,
+        idle: bool,
+        stopped: Arc<AtomicBool>,
+    }
+    impl capture::CaptureSource for FrameThenIdle {
+        fn next_frame(&mut self, _: Duration) -> anyhow::Result<Option<Frame>> {
+            self.calls += 1;
+            self.idle = self.calls == 2;
+            match self.calls {
+                1 => Ok(Some(solid_frame())),
+                2 => Ok(None),
+                _ => anyhow::bail!("mock stream disconnected after idle"),
+            }
+        }
+        fn confirms_idle(&self) -> bool {
+            self.idle
+        }
+        fn stop(&mut self) {
+            self.stopped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn idle_publishes_cached_colors_then_capture_failure_cleans_up() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let observed = stopped.clone();
+        let factory: CaptureFactory = Arc::new(move |_, _| {
+            Ok(Box::new(FrameThenIdle {
+                calls: 0,
+                idle: false,
+                stopped: observed.clone(),
+            }))
+        });
+        let (_, config) = watch::channel(Arc::new(Config {
+            fps: 120,
+            ..Config::default()
+        }));
+        let (frames, received) = watch::channel(None);
+        let error =
+            process_capture(config, &AtomicBool::new(false), frames, 1, factory).unwrap_err();
+        assert!(error.to_string().contains("disconnected after idle"));
+        let frame = received.borrow().clone().unwrap();
+        assert_eq!(
+            frame.frames, 2,
+            "explicit idle must refresh output freshness"
+        );
+        assert_eq!(frame.frame.pixels[0], [255, 0, 0]);
+        assert!(
+            frame
+                .colors
+                .iter()
+                .flatten()
+                .all(|rgb| rgb[0] > 0 && rgb[1] == 0 && rgb[2] == 0)
+        );
+        assert!(stopped.load(Ordering::SeqCst));
+    }
+
     async fn await_state(rx: &mut watch::Receiver<Snapshot>, state: SessionState) {
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
@@ -594,6 +804,78 @@ mod tests {
         .await
         .unwrap();
     }
+
+    #[tokio::test]
+    async fn worker_spawn_failure_starts_no_outputs_and_coordinator_recovers() {
+        let (commands, rx) = mpsc::channel(8);
+        let (snapshots, mut state) = watch::channel(Snapshot::default());
+        let first = AtomicBool::new(true);
+        let spawner: WorkerSpawner = Arc::new(move |task| {
+            if first.swap(false, Ordering::Relaxed) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "injected thread creation failure",
+                ));
+            }
+            spawn_capture_thread(task)
+        });
+        let opened = Arc::new(AtomicBool::new(false));
+        let observed = opened.clone();
+        let factory: CaptureFactory = Arc::new(move |_, fps| {
+            observed.store(true, Ordering::Relaxed);
+            Ok(Box::new(capture::Synthetic::new(fps)))
+        });
+        let task = tokio::spawn(run_with_spawner(rx, snapshots, factory, spawner));
+        let mut config = Config::default();
+        config.lights[0].route = Route::Wled {
+            host: "127.0.0.1:9".into(),
+            device_id: "aabbccddeeff".into(),
+            start: 0,
+            count: 1,
+        };
+        commands.send(Command::Start(config)).await.unwrap();
+        await_state(&mut state, SessionState::Error).await;
+        assert!(state.borrow().message.contains("thread creation failure"));
+        assert!(state.borrow().devices.is_empty());
+        assert!(state.borrow().preview.is_none());
+        assert!(!opened.load(Ordering::Relaxed));
+        // The failed attempt must leave no worker or active configuration that
+        // could reject this Start or publish frames from the failed session.
+        commands
+            .send(Command::Start(Config::default()))
+            .await
+            .unwrap();
+        await_state(&mut state, SessionState::Running).await;
+        assert!(opened.load(Ordering::Relaxed));
+        assert!(state.borrow().devices.is_empty());
+        commands.send(Command::Shutdown).await.unwrap();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn command_errors_distinguish_backpressure_from_stopped_engine() {
+        let (commands, receiver) = mpsc::channel(1);
+        let (_, snapshots) = watch::channel(Snapshot::default());
+        let engine = Engine {
+            commands,
+            snapshots,
+            task: tokio::spawn(async {}),
+        };
+        engine.send(Command::Stop).unwrap();
+        assert!(
+            engine
+                .send(Command::Stop)
+                .unwrap_err()
+                .to_string()
+                .contains("busy")
+        );
+        drop(receiver);
+        let error = engine.send(Command::Stop).unwrap_err().to_string();
+        assert!(error.contains("stopped"));
+        assert!(error.contains("Restart"));
+        engine.shutdown().await;
+    }
+
     #[tokio::test]
     async fn start_stop_and_latest_preview() {
         let (tx, rx) = mpsc::channel(8);
@@ -733,7 +1015,8 @@ mod tests {
             fps: 1,
             ..Default::default()
         };
-        let worker = worker(Arc::new(config), frames, events, 1, factory);
+        let spawner: WorkerSpawner = Arc::new(spawn_capture_thread);
+        let worker = worker(Arc::new(config), frames, events, 1, factory, &spawner).unwrap();
         tokio::time::timeout(Duration::from_secs(2), received.changed())
             .await
             .unwrap()

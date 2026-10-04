@@ -1,0 +1,23 @@
+--- src/outputs.rs (fixed)
++++ /tmp/copy/src/lib.rs (old cancellation boundary)
+@@ -1217,18 +1217,8 @@
+         }
+         tokio::select! {
+             _ = stop.changed() => return Ok(()),
+-            message = socket.next() => {
+-                // Receiving a message commits it to this iteration. A timer
+-                // must not drop an in-progress parse and lose a state event.
+-                // Stop may cancel parsing because it ends this connection.
+-                let decoded = tokio::select! {
+-                    biased;
+-                    _ = stop.changed() => return Ok(()),
+-                    decoded = decode_ha_message(socket, message) => decoded?,
+-                };
+-                if let Some((event, _)) = decoded {
+-                    update_ha_event(&event, &mut lights, &mut last_sent)?;
+-                }
++            event = ws_read(socket) => {
++                update_ha_event(&event?, &mut lights, &mut last_sent)?;
+             }
+             _ = tick.tick() => {
+                 if refreshed.elapsed() > Duration::from_secs(30) {

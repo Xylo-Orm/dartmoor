@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "macos"))]
 use std::sync::mpsc;
 
 use super::{CapturerBuildError, Options};
@@ -5,6 +6,11 @@ use crate::frame::Frame;
 
 #[cfg(target_os = "macos")]
 pub mod mac;
+
+#[cfg(any(target_os = "macos", test))]
+mod mac_frame_state;
+#[cfg(any(target_os = "macos", test))]
+mod mac_mailbox;
 
 #[cfg(target_os = "windows")]
 mod win;
@@ -19,6 +25,26 @@ pub type ChannelItem = (
 );
 #[cfg(not(target_os = "macos"))]
 pub type ChannelItem = Frame;
+
+#[cfg(target_os = "macos")]
+pub type FrameSender = mac_mailbox::Sender<ChannelItem>;
+#[cfg(target_os = "macos")]
+pub type FrameReceiver = mac_mailbox::Receiver<ChannelItem>;
+#[cfg(not(target_os = "macos"))]
+pub type FrameSender = mpsc::SyncSender<ChannelItem>;
+#[cfg(not(target_os = "macos"))]
+pub type FrameReceiver = mpsc::Receiver<ChannelItem>;
+
+pub(crate) fn channel() -> (FrameSender, FrameReceiver) {
+    #[cfg(target_os = "macos")]
+    {
+        mac_mailbox::channel()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        mpsc::sync_channel(1)
+    }
+}
 
 pub fn get_output_frame_size(options: &Options) -> [u32; 2] {
     #[cfg(target_os = "macos")]
@@ -35,7 +61,7 @@ pub fn get_output_frame_size(options: &Options) -> [u32; 2] {
     {
         let _ = options;
         // TODO: How to calculate this on Linux?
-        return [0, 0];
+        [0, 0]
     }
 }
 
@@ -47,6 +73,8 @@ pub struct Engine {
     mac: screencapturekit::sc_stream::SCStream,
     #[cfg(target_os = "macos")]
     error_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(target_os = "macos")]
+    image_state: mac_frame_state::ImageState,
 
     #[cfg(target_os = "windows")]
     win: win::WCStream,
@@ -56,10 +84,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(
-        options: &Options,
-        tx: mpsc::SyncSender<ChannelItem>,
-    ) -> Result<Engine, CapturerBuildError> {
+    pub fn new(options: &Options, tx: FrameSender) -> Result<Engine, CapturerBuildError> {
         #[cfg(target_os = "macos")]
         {
             let error_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -68,6 +93,7 @@ impl Engine {
             Ok(Engine {
                 mac,
                 error_flag,
+                image_state: mac_frame_state::ImageState::default(),
                 options: (*options).clone(),
                 started: false,
             })
@@ -75,23 +101,23 @@ impl Engine {
 
         #[cfg(target_os = "windows")]
         {
-            let win = win::create_capturer(&options, tx);
-            return Ok(Engine {
+            let win = win::create_capturer(options, tx);
+            Ok(Engine {
                 win,
                 options: (*options).clone(),
                 started: false,
-            });
+            })
         }
 
         #[cfg(target_os = "linux")]
         {
-            let linux = linux::create_capturer(&options, tx)
+            let linux = linux::create_capturer(options, tx)
                 .map_err(|error| CapturerBuildError::Backend(error.to_string()))?;
-            return Ok(Engine {
+            Ok(Engine {
                 linux,
                 options: (*options).clone(),
                 started: false,
-            });
+            })
         }
     }
 
@@ -142,13 +168,30 @@ impl Engine {
         get_output_frame_size(&self.options)
     }
 
+    pub(crate) fn has_backend_error(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let failed = self.error_flag.load(std::sync::atomic::Ordering::Relaxed);
+            if failed {
+                self.image_state.invalidate();
+            }
+            failed
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
     pub fn process_channel_item(&self, data: ChannelItem) -> Option<Frame> {
         #[cfg(target_os = "macos")]
         {
-            mac::process_sample_buffer(data.0, data.1, self.options.output_type)
+            mac::process_sample_buffer(data.0, data.1, self.options.output_type, &self.image_state)
         }
         #[cfg(not(target_os = "macos"))]
-        return Some(data);
+        {
+            Some(data)
+        }
     }
 }
 

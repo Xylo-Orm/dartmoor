@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/dartmoor_qa_cancel-e02027042a170b92)
+
+running 1 test
+test tests::ha_stream_commits_large_state_events_across_ticks_and_stop_interrupts_parsing ... FAILED
+
+failures:
+
+---- tests::ha_stream_commits_large_state_events_across_ticks_and_stop_interrupts_parsing stdout ----
+
+thread 'tests::ha_stream_commits_large_state_events_across_ticks_and_stop_interrupts_parsing' (2259449) panicked at src/lib.rs:1474:17:
+cadence sent a color using stale state while parsing was held
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::ha_stream_commits_large_state_events_across_ticks_and_stop_interrupts_parsing
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 33 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

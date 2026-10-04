@@ -1,8 +1,7 @@
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc;
 use std::{cmp, sync::Arc};
 
-use pixelformat::get_pts_in_nanoseconds;
+use pixelformat::{explicit_frame_status, get_pts_in_nanoseconds};
 use screencapturekit::{
     cm_sample_buffer::CMSampleBuffer,
     sc_content_filter::{InitParams, SCContentFilter},
@@ -11,7 +10,6 @@ use screencapturekit::{
     sc_shareable_content::SCShareableContent,
     sc_stream::SCStream,
     sc_stream_configuration::{PixelFormat, SCStreamConfiguration},
-    sc_types::SCFrameStatus,
 };
 use screencapturekit_sys::os_types::base::{CMTime, CMTimeScale};
 use screencapturekit_sys::os_types::geometry::{CGPoint, CGRect, CGSize};
@@ -24,7 +22,7 @@ use crate::{
     targets,
 };
 
-use super::ChannelItem;
+use super::{mac_frame_state::ImageState, FrameSender};
 
 mod apple_sys;
 mod pixel_buffer;
@@ -45,24 +43,27 @@ impl StreamErrorHandler for ErrorHandler {
 }
 
 pub struct Capturer {
-    pub tx: mpsc::SyncSender<ChannelItem>,
+    pub tx: FrameSender,
 }
 
 impl Capturer {
-    pub fn new(tx: mpsc::SyncSender<ChannelItem>) -> Self {
+    pub fn new(tx: FrameSender) -> Self {
         Capturer { tx }
     }
 }
 
 impl StreamOutput for Capturer {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
-        let _ = self.tx.try_send((sample, of_type));
+        if let SCStreamOutputType::Screen = of_type {
+            let kind = explicit_frame_status(&sample).kind();
+            let _ = self.tx.send((sample, of_type), kind);
+        }
     }
 }
 
 pub fn create_capturer(
     options: &Options,
-    tx: mpsc::SyncSender<ChannelItem>,
+    tx: FrameSender,
     error_flag: Arc<AtomicBool>,
 ) -> SCStream {
     // If no target is specified, capture the main display
@@ -230,38 +231,34 @@ pub fn get_crop_area(options: &Options) -> Area {
         })
 }
 
-pub fn process_sample_buffer(
+pub(crate) fn process_sample_buffer(
     sample: CMSampleBuffer,
     of_type: SCStreamOutputType,
     output_type: FrameType,
+    image_state: &ImageState,
 ) -> Option<Frame> {
     if let SCStreamOutputType::Screen = of_type {
-        let frame_status = &sample.frame_status;
-
-        match frame_status {
-            SCFrameStatus::Complete | SCFrameStatus::Started => unsafe {
-                return Some(match output_type {
+        return image_state.process(
+            explicit_frame_status(&sample),
+            sample,
+            |sample| unsafe {
+                match output_type {
                     FrameType::YUVFrame => {
-                        let yuvframe = pixelformat::create_yuv_frame(sample).unwrap();
-                        Frame::YUVFrame(yuvframe)
+                        pixelformat::create_yuv_frame(sample).map(Frame::YUVFrame)
                     }
-                    FrameType::RGB => {
-                        let rgbframe = pixelformat::create_rgb_frame(sample).unwrap();
-                        Frame::RGB(rgbframe)
-                    }
-                    FrameType::BGR0 => {
-                        let bgrframe = pixelformat::create_bgr_frame(sample).unwrap();
-                        Frame::BGR0(bgrframe)
-                    }
-                    FrameType::BGRAFrame => {
-                        let bgraframe = pixelformat::create_bgra_frame(sample).unwrap();
-                        Frame::BGRA(bgraframe)
-                    }
-                });
+                    FrameType::RGB => pixelformat::create_rgb_frame(sample).map(Frame::RGB),
+                    FrameType::BGR0 => pixelformat::create_bgr_frame(sample).map(Frame::BGR0),
+                    FrameType::BGRAFrame => pixelformat::create_bgra_frame(sample).map(Frame::BGRA),
+                }
             },
-            SCFrameStatus::Idle => {
-                // Quick hack - just send an empty frame, and the caller can figure out how to handle it
-                if let FrameType::BGRAFrame = output_type {
+            |sample| {
+                // Preserve the explicit Idle notification and timestamp without
+                // reading an image buffer: Idle samples need not contain one.
+                // Consumers must distinguish this marker from an image.
+                // Apple defines Idle as an unchanged display, distinct from
+                // Blank, Suspended, and Stopped; only Idle proves this:
+                // https://developer.apple.com/documentation/screencapturekit/scframestatus
+                if matches!(output_type, FrameType::BGRAFrame) {
                     return Some(Frame::BGRA(BGRAFrame {
                         display_time: get_pts_in_nanoseconds(&sample),
                         width: 0,
@@ -269,9 +266,9 @@ pub fn process_sample_buffer(
                         data: vec![],
                     }));
                 }
-            }
-            _ => {}
-        }
+                None
+            },
+        );
     }
 
     None

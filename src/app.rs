@@ -1,3 +1,7 @@
+mod ha_picker;
+mod layout_dialog;
+mod panels;
+mod text;
 use crate::{
     config::{self, CaptureSelection, Config},
     core::{Light, Point, Route, Shape},
@@ -5,15 +9,66 @@ use crate::{
     outputs,
 };
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
+
+const ACCENT: Color32 = Color32::from_rgb(102, 190, 237);
+const MUTED: Color32 = Color32::from_rgb(149, 166, 185);
+const AMBER: Color32 = Color32::from_rgb(239, 189, 110);
+
+fn section_heading(ui: &mut egui::Ui, number: &str, title: &str) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(number).small().color(ACCENT));
+        ui.label(egui::RichText::new(title).strong());
+    });
+    ui.add_space(6.0);
+}
+fn badge(ui: &mut egui::Ui, text: &str, color: Color32) {
+    egui::Frame::new()
+        .fill(color.gamma_multiply(0.12))
+        .corner_radius(4)
+        .inner_margin(egui::Margin::symmetric(6, 3))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(text).small().strong().color(color));
+        });
+}
+fn route_label(route: &Route, zones: usize) -> String {
+    match route {
+        Route::Wled { .. } => format!(
+            "WLED · {zones} color {}",
+            if zones == 1 { "zone" } else { "zones" }
+        ),
+        Route::HomeAssistant { .. } => "Home Assistant · ambient".into(),
+        Route::Mock => "Demo output".into(),
+    }
+}
+fn position_controls(ui: &mut egui::Ui, point: &mut Point) {
+    ui.horizontal(|ui| {
+        ui.label("X");
+        ui.add(
+            egui::DragValue::new(&mut point.x)
+                .speed(0.005)
+                .range(0.0..=1.0)
+                .fixed_decimals(3),
+        );
+        ui.label("Y");
+        ui.add(
+            egui::DragValue::new(&mut point.y)
+                .speed(0.005)
+                .range(0.0..=1.0)
+                .fixed_decimals(3),
+        );
+    });
+}
+
 use std::{
     sync::mpsc::{Receiver, SyncSender, sync_channel},
     time::{Duration, Instant},
 };
 
+#[derive(Debug)]
 enum JobResult {
     Wled(anyhow::Result<(String, outputs::WledInfo)>),
     WledRoute(String, Route, anyhow::Result<(String, outputs::WledInfo)>),
-    Ha(anyhow::Result<Vec<outputs::HaLight>>),
+    Ha(String, anyhow::Result<Vec<outputs::HaLight>>),
 }
 
 fn display_name(name: &str) -> String {
@@ -56,6 +111,41 @@ fn apply_inspection(
     Ok(true)
 }
 
+fn inspected_route(
+    expected: &Route,
+    host: String,
+    info: &outputs::WledInfo,
+) -> anyhow::Result<Route> {
+    // Refreshing a known controller must not discard a carefully configured
+    // segment mapping. A different identity is a new mapping to review.
+    let (start, count) = match expected {
+        Route::Wled {
+            start,
+            count,
+            device_id,
+            ..
+        } if !device_id.is_empty()
+            && crate::core::canonical_device_id(device_id)
+                == crate::core::canonical_device_id(&info.device_id) =>
+        {
+            anyhow::ensure!(
+                start
+                    .checked_add(*count)
+                    .is_some_and(|end| end <= info.led_count),
+                "The saved LED range exceeds this controller’s current LED count. Adjust First LED and LED count, then inspect again."
+            );
+            (*start, *count)
+        }
+        _ => (0, info.led_count.min(4096)),
+    };
+    Ok(Route::Wled {
+        host,
+        start,
+        count,
+        device_id: info.device_id.clone(),
+    })
+}
+
 fn select_desktop(source: &mut CaptureSelection) -> bool {
     if matches!(source, CaptureSelection::Desktop { .. }) {
         return false;
@@ -80,6 +170,17 @@ pub struct App {
     engine: Option<Engine>,
     runtime: Option<tokio::runtime::Runtime>,
     selected: Option<usize>,
+    selected_point: usize,
+    show_zones: bool,
+    compact_inspector: bool,
+    canvas_rect: Option<Rect>,
+    history: crate::editor::EditHistory,
+    edit_before: Option<Config>,
+    history_changed: bool,
+    saved_config: Config,
+    config_path: std::path::PathBuf,
+    styled: bool,
+    diagnostics: bool,
     host: String,
     token: String,
     notice: String,
@@ -90,26 +191,39 @@ pub struct App {
     jobs: Receiver<JobResult>,
     results: SyncSender<JobResult>,
     busy: bool,
+    ha_picker: Option<ha_picker::HaPicker>,
+    layout_dialog: Option<layout_dialog::LayoutDialog>,
     pending_apply: Option<Config>,
     drag: Option<(usize, usize)>,
     smoke: Option<(Instant, Duration)>,
     smoke_scheduled: bool,
 }
 impl App {
-    pub fn new(smoke: Option<Duration>, real_capture: bool) -> Self {
+    pub fn new(smoke: Option<Duration>, real_capture: bool) -> anyhow::Result<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
-            .expect("network runtime");
+            .map_err(|error| anyhow::anyhow!("Could not start networking: {error}"))?;
         let engine = Engine::new(&runtime);
         let (config, warning) = config::load();
         let (results, jobs) = sync_channel(4);
         let mut app = Self {
+            saved_config: config.clone(),
+            config_path: config::path(),
             config,
             engine: Some(engine),
             runtime: Some(runtime),
             selected: Some(0),
+            selected_point: 0,
+            show_zones: true,
+            compact_inspector: false,
+            canvas_rect: None,
+            history: crate::editor::EditHistory::default(),
+            edit_before: None,
+            history_changed: false,
+            styled: false,
+            diagnostics: false,
             host: String::new(),
             token: String::new(),
             notice: warning.unwrap_or_default(),
@@ -120,6 +234,8 @@ impl App {
             results,
             jobs,
             busy: false,
+            ha_picker: None,
+            layout_dialog: None,
             pending_apply: None,
             drag: None,
             smoke: smoke.map(|d| (Instant::now(), d)),
@@ -132,7 +248,7 @@ impl App {
             }
             app.send(Command::Start(app.config.clone()));
         }
-        app
+        Ok(app)
     }
     fn send(&mut self, cmd: Command) {
         if matches!(
@@ -146,8 +262,11 @@ impl App {
         }
     }
     fn save(&mut self) {
-        self.notice = match config::save(&self.config) {
-            Ok(()) => "Layout saved".into(),
+        self.notice = match config::save_to(&self.config, &self.config_path) {
+            Ok(()) => {
+                self.saved_config = self.config.clone();
+                "Layout saved".into()
+            }
             Err(e) => format!("Could not save layout: {e}"),
         };
     }
@@ -187,6 +306,7 @@ impl App {
             return false;
         }
         self.selected = Some(self.config.lights.len() - 1);
+        self.selected_point = 0;
         true
     }
     fn poll_jobs(&mut self) {
@@ -194,434 +314,444 @@ impl App {
             self.busy = false;
             match result {
                 JobResult::Wled(Ok((host, info))) => {
-                    if self.config.lights.iter().any(|l|matches!(&l.route,Route::Wled{device_id,..} if crate::core::canonical_device_id(device_id)==crate::core::canonical_device_id(&info.device_id))) {self.notice="This WLED controller is already in the layout. Edit its mapping below.".into();}
-                else {let count=info.led_count.min(4096);self.notice=format!("{}: {count} LEDs; segments {:?}. Mapping starts at physical LED 0; adjust below.",info.name,info.segments);self.add(info.name,Route::Wled{host,start:0,count,device_id:info.device_id},count.min(128),true);}
-                }
-                JobResult::WledRoute(id, expected, Ok((host,info)))=> {
-                    let route=Route::Wled{host,start:0,count:info.led_count.min(4096),device_id:info.device_id};
-                    self.notice=match apply_inspection(&mut self.config,&id,&expected,route) {
-                        Ok(true)=>format!("Verified {}. Adjust physical LED mapping for this record.",info.name),
-                        Ok(false)=>"Inspection ignored because this route was edited or removed.".into(),
-                        Err(e)=>format!("Inspection would invalidate the layout: {e}"),
-                    };
-                },
-                JobResult::Ha(Ok(lights)) => {
-                    let mut added = 0;
-                    let mut skipped = 0;
-                    for l in lights {
-                        if l.available && l.color_modes.iter().any(|m|["rgb","rgbw","rgbww","hs","xy"].contains(&m.as_str())) && !self.config.lights.iter().any(|old|matches!(&old.route,Route::HomeAssistant{entity_id} if *entity_id==l.entity_id)) {
-                    if self.add(l.name,Route::HomeAssistant{entity_id:l.entity_id},1,false){added+=1;}else{skipped+=1;}
-                }
+                    let existing = self.config.lights.iter().position(|light| {
+                        matches!(&light.route, Route::Wled { device_id, .. }
+                            if crate::core::canonical_device_id(device_id)
+                                == crate::core::canonical_device_id(&info.device_id))
+                    });
+                    if let Some(index) = existing {
+                        self.selected = Some(index);
+                        self.selected_point = 0;
+                        self.compact_inspector = true;
+                        self.notice = "This WLED controller is already in the layout. Its properties are selected.".into();
+                    } else {
+                        let count = info.led_count.min(4096);
+                        self.notice = format!(
+                            "{}: {count} LEDs; segments {:?}. Mapping starts at physical LED 0; adjust in properties.",
+                            info.name, info.segments
+                        );
+                        self.add(
+                            info.name,
+                            Route::Wled {
+                                host,
+                                start: 0,
+                                count,
+                                device_id: info.device_id,
+                            },
+                            count.min(128),
+                            true,
+                        );
                     }
-                    self.notice = format!(
-                        "Added {added} available color lights; skipped {skipped} invalid or over-limit additions. Home Assistant uses slower ambient updates; avoid adding a second route for the same physical device."
-                    );
                 }
-                JobResult::Wled(Err(e)) | JobResult::WledRoute(_,_,Err(e)) | JobResult::Ha(Err(e)) => self.notice = e.to_string(),
-            }
-        }
-    }
-    fn settings(&mut self, ui: &mut egui::Ui, running: bool) -> bool {
-        let mut changed = false;
-        ui.heading("Lumen Desktop");
-        ui.label("Desktop colors → your lights");
-        ui.separator();
-        ui.add_enabled_ui(!running,|ui| {
-            ui.label("Capture source");
-            let synthetic=matches!(self.config.source,CaptureSelection::Synthetic);
-            if ui.selectable_label(synthetic,"Simulated desktop (development)").clicked(){self.config.source=CaptureSelection::Synthetic;changed=true;}
-            if ui.selectable_label(!synthetic,"Screen / window").clicked(){changed |= select_desktop(&mut self.config.source);}
-            if !synthetic {
-                #[cfg(target_os="linux")] ui.label("Start opens the Wayland screen-sharing portal. Select one display or window there.");
-                #[cfg(not(target_os="linux"))] {
-                    if ui.button("Refresh sources").clicked(){self.sources=crate::capture::sources();}
-                    if let CaptureSelection::Desktop{id}=&mut self.config.source {egui::ComboBox::from_id_salt("source").selected_text(self.sources.iter().find(|s|id.as_ref()==Some(&s.id)).map(|s|s.name.as_str()).unwrap_or("Primary display / saved source")).show_ui(ui,|ui| {
-                        for source in &self.sources {changed|=ui.selectable_value(id,Some(source.id.clone()),&source.name).changed();}
-                    });}
-                }
-            }
-            ui.add(egui::Slider::new(&mut self.config.fps,5..=60).text("Capture fps"));
-        });
-        changed |= ui
-            .add(egui::Slider::new(&mut self.config.brightness, 0.0..=1.0).text("Brightness limit"))
-            .changed();
-        changed |= ui
-            .add(
-                egui::Slider::new(&mut self.config.smoothing_ms, 0.0..=1500.0).text("Smoothing ms"),
-            )
-            .changed();
-        ui.separator();
-        ui.label("Lights");
-        for (i, l) in self.config.lights.iter().enumerate() {
-            if ui
-                .selectable_label(self.selected == Some(i), &l.name)
-                .clicked()
-            {
-                self.selected = Some(i);
-            }
-        }
-        ui.add_enabled_ui(!running && !self.busy,|ui| {
-            ui.horizontal(|ui| {if ui.button("+ Mock bulb").clicked(){self.add("Simulated bulb".into(),Route::Mock,1,false);changed=true;}
-if ui.button("+ Mock strip").clicked(){self.add("Simulated strip".into(),Route::Mock,16,true);changed=true;}});
-            ui.collapsing("Add WLED controller",|ui| {
-                ui.label("Hostname or IP (no http://)");ui.label("Streaming owns the whole controller; unmapped LEDs are black. Adjust physical LED range below.");ui.checkbox(&mut self.config.restore_wled_state,"Try restoring previous WLED state on stop");ui.text_edit_singleline(&mut self.host);
-                if ui.button("Inspect and add").clicked(){self.busy=true;let host=self.host.trim().to_owned();let tx=self.results.clone();self.runtime.as_ref().unwrap().spawn(async move {let info=outputs::inspect_wled(&host).await.map(|i|(host,i));let _=tx.try_send(JobResult::Wled(info));});}
-            });
-            ui.collapsing("Home Assistant · ambient",|ui| {
-                ui.label("Server URL, e.g. https://ha.example");ui.text_edit_singleline(&mut self.config.ha_url);
-                ui.label("Long-lived access token (stored in OS keyring)");ui.add(egui::TextEdit::singleline(&mut self.token).password(true));
-                ui.add(egui::Slider::new(&mut self.config.ha_interval_ms,500..=10000).text("ms between service calls"));
-                if ui.button("Connect and discover").clicked(){
-                    self.busy=true;let url=self.config.ha_url.trim().to_owned();let token=std::mem::take(&mut self.token);let tx=self.results.clone();
-                    self.runtime.as_ref().unwrap().spawn(async move {
-                        let secret=if token.is_empty(){Ok(())}else{outputs::save_token_async(&url,&token).await};
-                        let result=match secret {Ok(())=>outputs::discover_ha(&url).await,Err(e)=>Err(e)};let _=tx.try_send(JobResult::Ha(result));
-                    });
-                }
-            });
-        });
-        if self.busy {
-            ui.spinner();
-            ui.label("Connecting…");
-        }
-        ui.separator();
-        if let Some(i) = self.selected.filter(|&i| i < self.config.lights.len()) {
-            let l = &mut self.config.lights[i];
-            ui.label("Selected light");
-            changed |= ui.text_edit_singleline(&mut l.name).changed();
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(matches!(l.shape, Shape::Bulb { .. }), "Bulb")
-                    .clicked()
-                    && !matches!(l.shape, Shape::Bulb { .. })
-                {
-                    l.shape = Shape::Bulb {
-                        center: Point { x: 0.5, y: 0.5 },
-                        radius: 0.08,
-                    };
-                    changed = true;
-                }
-                if ui
-                    .selectable_label(matches!(l.shape, Shape::Strip { .. }), "Strip path")
-                    .clicked()
-                    && !matches!(l.shape, Shape::Strip { .. })
-                {
-                    l.shape = Shape::Strip {
-                        points: vec![Point { x: 0.1, y: 0.9 }, Point { x: 0.9, y: 0.9 }],
-                        radius: 0.05,
-                        reverse: false,
-                    };
-                    changed = true;
-                }
-            });
-            match &mut l.shape {
-                Shape::Bulb { radius, .. } => {
-                    changed |= ui
-                        .add(egui::Slider::new(radius, 0.005..=0.4).text("Sample radius"))
-                        .changed()
-                }
-                Shape::Strip {
-                    points,
-                    radius,
-                    reverse,
-                } => {
-                    changed |= ui
-                        .add(egui::Slider::new(radius, 0.005..=0.4).text("Sample extent"))
-                        .changed();
-                    changed |= ui.checkbox(reverse, "Reverse strip direction").changed();
-                    ui.horizontal(|ui| {
-                        if ui.button("Add path point").clicked() && points.len() < 64 {
-                            let p = *points.last().unwrap();
-                            points.push(Point {
-                                x: (p.x + 0.05).min(1.0),
-                                y: (p.y - 0.1).max(0.0),
-                            });
-                            changed = true;
-                        }
-                        if ui
-                            .add_enabled(points.len() > 2, egui::Button::new("Remove last point"))
-                            .clicked()
-                        {
-                            points.pop();
-                            changed = true;
-                        }
-                    });
-                    ui.label("Drag the numbered points in the preview.");
-                }
-            }
-            if matches!(l.route, Route::HomeAssistant { .. }) {
-                l.zones = 1;
-                ui.label("One color · ambient updates");
-            } else {
-                changed |= ui
-                    .add(egui::Slider::new(&mut l.zones, 1..=256).text("Logical zones"))
-                    .changed();
-                ui.label(
-                    "1 zone averages the whole strip; more zones require addressable hardware.",
-                );
-            }
-            ui.add_enabled_ui(!running, |ui| {
-                let mut route=match l.route {Route::Wled{..}=>0,Route::HomeAssistant{..}=>1,Route::Mock=>2};
-                let old=route;
-                egui::ComboBox::from_id_salt("active-route").selected_text(["Direct WLED","Home Assistant","Mock output"][route]).show_ui(ui,|ui| {
-                    ui.selectable_value(&mut route,0,"Direct WLED");ui.selectable_value(&mut route,1,"Home Assistant");ui.selectable_value(&mut route,2,"Mock output");
-                });
-                if route!=old {l.route=match route {0=>Route::Wled{host:"".into(),start:0,count:1,device_id:"".into()},1=>Route::HomeAssistant{entity_id:"light.".into()},_=>Route::Mock};if route==1{l.zones=1;}changed=true;}
-                ui.label("One active route. When changing route, enter the same physical device's address/identity. No automatic fallback.");
-            });
-            ui.add_enabled_ui(!running, |ui| match &mut l.route {
-                Route::Wled {
-                    host,
-                    start,
-                    count,
-                    device_id,
-                } => {
-                    ui.label("Direct WLED · saved MAC identity");
-                    ui.text_edit_singleline(device_id);
-                    ui.label("Hostname / IP (inspect with Add WLED to obtain MAC)");
-                    ui.text_edit_singleline(host);
-                    if ui
-                        .add_enabled(!self.busy, egui::Button::new("Inspect this route"))
-                        .clicked()
+                JobResult::WledRoute(id, expected, Ok((host, info))) => {
+                    self.notice = match inspected_route(&expected, host, &info)
+                        .and_then(|route| apply_inspection(&mut self.config, &id, &expected, route))
                     {
-                        self.busy = true;
-                        let expected = Route::Wled {
-                            host: host.clone(),
-                            start: *start,
-                            count: *count,
-                            device_id: device_id.clone(),
-                        };
-                        let host = host.trim().to_owned();
-                        let id = l.id.clone();
-                        let tx = self.results.clone();
-                        self.runtime.as_ref().unwrap().spawn(async move {
-                            let result =
-                                outputs::inspect_wled(&host).await.map(|info| (host, info));
-                            let _ = tx.try_send(JobResult::WledRoute(id, expected, result));
-                        });
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("First LED");
-                        ui.add(egui::DragValue::new(start).range(0..=65534));
-                        ui.label("LED count");
-                        ui.add(egui::DragValue::new(count).range(1..=4096));
-                    });
-                }
-                Route::HomeAssistant { entity_id } => {
-                    ui.label("Home Assistant route");
-                    ui.text_edit_singleline(entity_id);
-                }
-                Route::Mock => {
-                    ui.label("Mock output — no physical device");
-                }
-            });
-            let mut remove = false;
-            ui.add_enabled_ui(!running, |ui| {
-                remove = ui.button("Remove light").clicked();
-            });
-            if remove {
-                self.config.lights.remove(i);
-                self.selected = None;
-                changed = true;
-            }
-        }
-        ui.separator();
-        if ui.button("Save layout").clicked() {
-            self.save();
-        }
-        if !self.notice.is_empty() {
-            ui.label(&self.notice);
-        }
-        changed
-    }
-    fn canvas(&mut self, ui: &mut egui::Ui) -> bool {
-        let snapshot = self.engine.as_ref().unwrap().snapshots.borrow().clone();
-        if snapshot.preview.is_none() {
-            self.texture = None;
-            self.preview = None;
-        }
-        if preview_changed(&self.preview, &snapshot.preview)
-            && let Some(frame) = &snapshot.preview
-        {
-            let bytes: Vec<u8> = frame.pixels.iter().flatten().copied().collect();
-            let image = egui::ColorImage::from_rgb([frame.width, frame.height], &bytes);
-            if let Some(texture) = &mut self.texture {
-                texture.set(image, egui::TextureOptions::LINEAR);
-            } else {
-                self.texture = Some(ui.ctx().load_texture(
-                    "desktop-preview",
-                    image,
-                    egui::TextureOptions::LINEAR,
-                ));
-            }
-            self.preview = Some(frame.clone());
-        }
-        let aspect = snapshot
-            .preview
-            .as_ref()
-            .map(|f| f.width as f32 / f.height as f32)
-            .unwrap_or(16.0 / 9.0);
-        let available = ui.available_size();
-        let width = available.x.min(available.y * aspect).max(1.0);
-        let size = Vec2::new(width, width / aspect);
-        let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4.0, Color32::from_rgb(22, 27, 35));
-        if let Some(texture) = &self.texture {
-            painter.image(
-                texture.id(),
-                rect,
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        } else {
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Start synchronization for a desktop preview",
-                egui::FontId::proportional(17.0),
-                Color32::LIGHT_GRAY,
-            );
-        }
-        let screen = |p: Point| {
-            Pos2::new(
-                rect.left() + p.x * rect.width(),
-                rect.top() + p.y * rect.height(),
-            )
-        };
-        let mut handles = vec![];
-        for (i, l) in self.config.lights.iter().enumerate() {
-            let color = snapshot
-                .colors
-                .get(i)
-                .and_then(|v| v.first())
-                .map(|c| Color32::from_rgb(c[0], c[1], c[2]))
-                .unwrap_or(Color32::YELLOW);
-            let selected = self.selected == Some(i);
-            let stroke = Stroke::new(if selected { 3.0_f32 } else { 1.5_f32 }, color);
-            match &l.shape {
-                Shape::Bulb { center, radius } => {
-                    let p = screen(*center);
-                    painter.circle_stroke(p, *radius * rect.width().min(rect.height()), stroke);
-                    painter.circle_filled(p, 7.0, color);
-                    handles.push((i, 0, p));
-                }
-                Shape::Strip { points, radius, .. } => {
-                    for pair in points.windows(2) {
-                        painter.line_segment(
-                            [screen(pair[0]), screen(pair[1])],
-                            Stroke::new(
-                                (*radius * rect.width().min(rect.height()) * 2.0).max(3.0),
-                                color.gamma_multiply(0.3),
-                            ),
-                        );
-                        painter.line_segment([screen(pair[0]), screen(pair[1])], stroke);
-                    }
-                    for (j, p) in points.iter().enumerate() {
-                        let p = screen(*p);
-                        painter.circle_filled(p, 6.0, color);
-                        painter.text(
-                            p + Vec2::new(0.0, -12.0),
-                            egui::Align2::CENTER_CENTER,
-                            format!("{}", j + 1),
-                            egui::FontId::proportional(12.0),
-                            Color32::WHITE,
-                        );
-                        handles.push((i, j, p));
-                    }
-                }
-            }
-        }
-        if (response.clicked() || response.drag_started())
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            self.drag = handles
-                .iter()
-                .filter(|(_, _, p)| p.distance(pos) < 24.0)
-                .min_by(|a, b| a.2.distance(pos).total_cmp(&b.2.distance(pos)))
-                .map(|(i, j, _)| (*i, *j));
-            if let Some((i, _)) = self.drag {
-                self.selected = Some(i);
-            }
-        }
-        let mut changed = false;
-        if response.dragged()
-            && let (Some((i, j)), Some(pos)) = (self.drag, response.interact_pointer_pos())
-        {
-            let p = Point {
-                x: ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
-                y: ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0),
-            };
-            if let Some(l) = self.config.lights.get_mut(i) {
-                match &mut l.shape {
-                    Shape::Bulb { center, .. } => *center = p,
-                    Shape::Strip { points, .. } => {
-                        if let Some(point) = points.get_mut(j) {
-                            *point = p;
+                        Ok(true) => format!(
+                            "Verified {}. Review the physical LED mapping in properties.",
+                            info.name
+                        ),
+                        Ok(false) => {
+                            "Inspection ignored because this route was edited or removed.".into()
                         }
-                    }
+                        Err(error) => format!("Could not apply inspection: {error}"),
+                    };
                 }
-                changed = true;
+                JobResult::Ha(origin, Ok(lights)) => {
+                    if self.config.ha_url.trim() != origin {
+                        self.notice =
+                            "Discovery ignored because the Home Assistant server changed.".into();
+                        continue;
+                    }
+                    self.ha_picker = Some(ha_picker::HaPicker::new(
+                        origin,
+                        lights,
+                        &self.config.lights,
+                    ));
+                    self.notice = "Discovery complete. Choose the lights to add.".into();
+                }
+                JobResult::Wled(Err(error))
+                | JobResult::WledRoute(_, _, Err(error))
+                | JobResult::Ha(_, Err(error)) => self.notice = error.to_string(),
             }
         }
-        if response.drag_stopped() {
-            self.drag = None;
-        }
-        changed
     }
-}
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+    fn finish_edit(&mut self, before: &Config, pointer_down: bool) {
+        if self.history_changed {
+            self.edit_before = None;
+            return;
+        }
+        if before != &self.config && self.edit_before.is_none() {
+            self.edit_before = Some(before.clone());
+        }
+        if !pointer_down && let Some(before) = self.edit_before.take() {
+            self.history.checkpoint(&before, &self.config);
+        }
+    }
+    fn undo(&mut self, redo: bool) {
+        if self.busy || self.ha_picker.is_some() || self.layout_dialog.is_some() {
+            return;
+        }
+        if let Some(before) = self.edit_before.take() {
+            self.history.checkpoint(&before, &self.config);
+        }
+        let config = if redo {
+            self.history.redo(&self.config)
+        } else {
+            self.history.undo(&self.config)
+        };
+        if let Some(config) = config {
+            self.history_changed = true;
+            self.config = config;
+            self.selected = self.selected.filter(|&i| i < self.config.lights.len());
+            self.drag = None;
+            self.selected_point = 0;
+            self.notice = if redo { "Edit restored" } else { "Edit undone" }.into();
+        }
+    }
+    fn render(&mut self, ctx: &egui::Context) -> bool {
+        if !self.styled {
+            let mut style = (*ctx.style()).clone();
+            style.spacing.item_spacing = Vec2::new(8.0, 8.0);
+            style.spacing.button_padding = Vec2::new(10.0, 7.0);
+            style.visuals = egui::Visuals::dark();
+            style.visuals.panel_fill = Color32::from_rgb(23, 30, 41);
+            style.visuals.window_fill = Color32::from_rgb(28, 36, 48);
+            style.visuals.selection.bg_fill = Color32::from_rgb(36, 78, 104);
+            style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+            ctx.set_style(style);
+            self.styled = true;
+        }
+        self.history_changed = false;
+        let before = self.config.clone();
         self.poll_jobs();
         let snapshot = self.engine.as_ref().unwrap().snapshots.borrow().clone();
-        let running = matches!(
+        let mut running = matches!(
             snapshot.state,
             SessionState::Running | SessionState::RequestingPermission
         );
-        let mut changed = false;
+        let validation = self.config.validate().err().map(|e| e.to_string());
+        let dirty = self.config != self.saved_config;
+        let state_label = match snapshot.state {
+            SessionState::Idle => "READY",
+            SessionState::RequestingPermission => "AWAITING CAPTURE",
+            SessionState::Running => "SYNCING",
+            SessionState::Paused => "PAUSED",
+            SessionState::Error => "NEEDS ATTENTION",
+        };
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(!running && !self.busy, egui::Button::new("▶ Start"))
-                    .clicked()
-                {
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("Lumen Desktop").size(21.0).strong());
+                badge(
+                    ui,
+                    state_label,
+                    if snapshot.state == SessionState::Running {
+                        Color32::from_rgb(116, 213, 171)
+                    } else if snapshot.state == SessionState::Error {
+                        AMBER
+                    } else {
+                        MUTED
+                    },
+                );
+                ui.separator();
+                let start_enabled = !running
+                    && !self.busy
+                    && self.ha_picker.is_none()
+                    && self.layout_dialog.is_none()
+                    && validation.is_none()
+                    && !self.config.lights.is_empty();
+                let start = ui.add_enabled(
+                    start_enabled,
+                    egui::Button::new(if snapshot.state == SessionState::Paused {
+                        "Resume"
+                    } else {
+                        "Start sync"
+                    })
+                    .fill(Color32::from_rgb(35, 89, 118)),
+                );
+                if start.clicked() {
                     self.send(Command::Start(self.config.clone()));
+                    running = true;
+                }
+                if !start_enabled {
+                    start.on_hover_text(if running {
+                        "Synchronization is already active."
+                    } else if self.busy {
+                        "Wait for the device connection to finish."
+                    } else if self.ha_picker.is_some() || self.layout_dialog.is_some() {
+                        "Finish or close the open dialog first."
+                    } else if self.config.lights.is_empty() {
+                        "Add a light first."
+                    } else {
+                        "Resolve the layout message below before starting."
+                    });
                 }
                 if ui
-                    .add_enabled(running, egui::Button::new("Ⅱ Pause"))
+                    .add_enabled(running, egui::Button::new("Pause"))
                     .clicked()
                 {
                     self.send(Command::Pause);
                 }
-                if ui.button("■ Stop").clicked() {
+                if ui
+                    .add_enabled(
+                        running
+                            || snapshot.state == SessionState::Paused
+                            || snapshot.state == SessionState::Error,
+                        egui::Button::new("Stop"),
+                    )
+                    .clicked()
+                {
                     self.send(Command::Stop);
                 }
                 ui.separator();
-                ui.label(format!("{:?}", snapshot.state));
-                ui.label(&snapshot.message);
+                if ui
+                    .add_enabled(
+                        !running
+                            && !self.busy
+                            && self.ha_picker.is_none()
+                            && self.layout_dialog.is_none()
+                            && (self.history.can_undo() || self.edit_before.is_some()),
+                        egui::Button::new("Undo"),
+                    )
+                    .on_hover_text("Ctrl/Cmd+Z · stop synchronization to undo layout changes")
+                    .clicked()
+                {
+                    self.undo(false);
+                }
+                if ui
+                    .add_enabled(
+                        !running
+                            && !self.busy
+                            && self.ha_picker.is_none()
+                            && self.layout_dialog.is_none()
+                            && self.history.can_redo(),
+                        egui::Button::new("Redo"),
+                    )
+                    .on_hover_text("Ctrl/Cmd+Shift+Z")
+                    .clicked()
+                {
+                    self.undo(true);
+                }
+                if ui
+                    .add_enabled(
+                        validation.is_none() && dirty,
+                        egui::Button::new("Save layout"),
+                    )
+                    .clicked()
+                {
+                    self.save();
+                }
+                ui.add_enabled_ui(
+                    !running
+                        && !self.busy
+                        && self.ha_picker.is_none()
+                        && self.layout_dialog.is_none(),
+                    |ui| {
+                        ui.menu_button("Layouts", |ui| {
+                            if ui.button("Import JSON…").clicked() {
+                                self.layout_dialog = Some(layout_dialog::LayoutDialog::import());
+                                ui.close();
+                            }
+                            if ui
+                                .add_enabled(
+                                    validation.is_none(),
+                                    egui::Button::new("Export JSON…"),
+                                )
+                                .clicked()
+                            {
+                                match layout_dialog::LayoutDialog::export(&self.config) {
+                                    Ok(dialog) => self.layout_dialog = Some(dialog),
+                                    Err(e) => self.notice = e.to_string(),
+                                };
+                                ui.close();
+                            }
+                        });
+                    },
+                );
+                ui.label(
+                    egui::RichText::new(if dirty { "Unsaved changes" } else { "Saved" })
+                        .small()
+                        .color(if dirty { AMBER } else { MUTED }),
+                );
             });
+            ui.add_space(4.0);
         });
-        egui::SidePanel::left("settings")
-            .default_width(310.0)
-            .resizable(true)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    changed |= self.settings(ui, running);
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            if let Some(error) = &validation {
+                ui.label(
+                    egui::RichText::new(format!("Layout needs attention: {error}")).color(AMBER),
+                );
+            }
+            if !self.notice.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    if ui.small_button("Dismiss").clicked() {
+                        self.notice.clear();
+                    }
+                    ui.label(&self.notice);
+                });
+            }
+            ui.horizontal_wrapped(|ui| {
+                if snapshot.state == SessionState::RequestingPermission {
+                    ui.spinner();
+                }
+                ui.label(&snapshot.message);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.toggle_value(&mut self.diagnostics, "Diagnostics");
                 });
             });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.label(format!(
-                "{} frames · sampling {:.2} ms · minimize to keep syncing; close to stop",
-                snapshot.frames, snapshot.processing_ms
-            ));
-            for (name, status) in &snapshot.devices {
-                ui.label(format!("{name}: {status}"));
+            if self.diagnostics {
+                ui.small(format!(
+                    "{} frames · {:.2} ms sampling · {:?}",
+                    snapshot.frames, snapshot.processing_ms, snapshot.state
+                ));
             }
+            ui.label(
+                egui::RichText::new("Minimize to keep syncing · close the window to stop")
+                    .small()
+                    .color(MUTED),
+            );
         });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            changed |= self.canvas(ui);
-        });
-        if changed && running {
+        let compact = ctx.content_rect().width() < 1000.0;
+        egui::SidePanel::left("setup")
+            .default_width(270.0)
+            .width_range(230.0..=350.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                if compact {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.compact_inspector, false, "Setup");
+                        ui.selectable_value(&mut self.compact_inspector, true, "Light properties");
+                    });
+                    ui.separator();
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt(if compact && self.compact_inspector {
+                        "compact-inspector-scroll"
+                    } else {
+                        "setup-scroll"
+                    })
+                    .show(ui, |ui| {
+                        if compact && self.compact_inspector {
+                            self.inspector(ui, running);
+                        } else {
+                            self.setup(ui, running, &snapshot);
+                        }
+                    });
+            });
+        if !compact {
+            egui::SidePanel::right("inspector")
+                .default_width(265.0)
+                .width_range(235.0..=350.0)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("inspector-scroll")
+                        .show(ui, |ui| {
+                            self.inspector(ui, running);
+                        });
+                });
+        }
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::central_panel(&ctx.style())
+                    .fill(Color32::from_rgb(14, 20, 29))
+                    .inner_margin(16),
+            )
+            .show(ctx, |ui| {
+                self.canvas(ui);
+            });
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S))
+            && self.config.validate().is_ok()
+        {
+            self.save();
+        }
+        if !ctx.wants_keyboard_input() && self.ha_picker.is_none() && self.layout_dialog.is_none() {
+            ctx.input(|input| {
+                if !running
+                    && !self.busy
+                    && self.ha_picker.is_none()
+                    && self.layout_dialog.is_none()
+                    && input.modifiers.command
+                    && input.key_pressed(egui::Key::Z)
+                {
+                    self.undo(input.modifiers.shift);
+                }
+                if !input.modifiers.command
+                    && let Some(index) = self.selected
+                    && let Some(light) = self.config.lights.get_mut(index)
+                {
+                    let step = if input.modifiers.shift { 0.02 } else { 0.002 };
+                    let mut delta = Point { x: 0.0, y: 0.0 };
+                    if input.key_pressed(egui::Key::ArrowLeft) {
+                        delta.x -= step;
+                    }
+                    if input.key_pressed(egui::Key::ArrowRight) {
+                        delta.x += step;
+                    }
+                    if input.key_pressed(egui::Key::ArrowUp) {
+                        delta.y -= step;
+                    }
+                    if input.key_pressed(egui::Key::ArrowDown) {
+                        delta.y += step;
+                    }
+                    crate::editor::move_selected(&mut light.shape, self.selected_point, delta);
+                }
+            });
+        }
+        if let Some(mut picker) = self.ha_picker.take() {
+            let modal = egui::Modal::new(egui::Id::new("ha-discovery-picker"))
+                .show(ctx, |ui| picker.show(ui));
+            if let Some(chosen) = modal.inner {
+                if picker.origin != self.config.ha_url.trim() || running {
+                    self.notice="The connection or session changed. Stop and discover again before adding lights.".into();
+                } else {
+                    let mut added = 0;
+                    for light in chosen {
+                        if self.add(
+                            light.name,
+                            Route::HomeAssistant {
+                                entity_id: light.entity_id,
+                            },
+                            1,
+                            false,
+                        ) {
+                            added += 1;
+                        }
+                    }
+                    self.notice = format!(
+                        "Added {added} selected Home Assistant lights · ambient synchronization."
+                    );
+                    self.compact_inspector = true;
+                }
+            } else if !modal.should_close() {
+                self.ha_picker = Some(picker);
+            }
+        }
+        if let Some(mut dialog) = self.layout_dialog.take() {
+            let modal = egui::Modal::new(egui::Id::new("layout-interchange"))
+                .show(ctx, |ui| dialog.show(ui));
+            if let Some(config) = modal.inner {
+                if running || self.busy {
+                    self.notice =
+                        "Stop synchronization and finish pending connections before importing."
+                            .into();
+                } else {
+                    self.config = config;
+                    self.selected = (!self.config.lights.is_empty()).then_some(0);
+                    self.selected_point = 0;
+                    self.drag = None;
+                    self.notice="Layout imported. Review device addresses and source, then Save when ready.".into();
+                }
+            } else if !modal.should_close() {
+                self.layout_dialog = Some(dialog);
+            }
+        }
+        self.finish_edit(
+            &before,
+            ctx.input(|i| i.pointer.any_down()) || ctx.wants_keyboard_input(),
+        );
+        if before != self.config && running && self.config.validate().is_ok() {
             self.pending_apply = Some(self.config.clone());
         }
         if !running {
@@ -636,6 +766,17 @@ impl eframe::App for App {
         {
             self.pending_apply = None;
         }
+        ctx.request_repaint_after(if running || self.busy || self.drag.is_some() {
+            Duration::from_millis(33)
+        } else {
+            Duration::from_millis(250)
+        });
+        running
+    }
+}
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.render(ctx);
         if let Some((_, duration)) = self.smoke
             && !self.smoke_scheduled
         {
@@ -654,17 +795,12 @@ impl eframe::App for App {
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
             });
         }
-        ctx.request_repaint_after(if running {
-            Duration::from_millis(100)
-        } else {
-            Duration::from_millis(300)
-        });
     }
 }
 impl Drop for App {
     fn drop(&mut self) {
         if self.smoke.is_none()
-            && let Err(e) = config::save(&self.config)
+            && let Err(e) = config::save_to(&self.config, &self.config_path)
         {
             tracing::warn!("Layout save failed: {e}");
         }
@@ -678,6 +814,617 @@ impl Drop for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn headless_app() -> (App, tempfile::TempDir) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new(None, false).unwrap();
+        app.config = Config::default();
+        app.saved_config = app.config.clone();
+        app.config_path = directory.path().join("config.json");
+        app.notice.clear();
+        // Suppress automatic persistence in Drop; explicit saves target the
+        // temporary directory. No native window or capture is constructed.
+        app.smoke = Some((Instant::now(), Duration::from_secs(3600)));
+        (app, directory)
+    }
+    fn draw(
+        app: &mut App,
+        ctx: &egui::Context,
+        size: Vec2,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                events,
+                modifiers,
+                ..Default::default()
+            },
+            |ctx| {
+                app.render(ctx);
+            },
+        )
+    }
+    fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+    fn text_rect(output: &egui::FullOutput, label: &str) -> Rect {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.galley.rect.translate(text.pos.to_vec2()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing text {label}"))
+    }
+    fn click(app: &mut App, ctx: &egui::Context, size: Vec2, pos: Pos2) -> egui::FullOutput {
+        draw(
+            app,
+            ctx,
+            size,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            egui::Modifiers::NONE,
+        );
+        draw(
+            app,
+            ctx,
+            size,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+        )
+    }
+
+    #[test]
+    fn headless_layout_preserves_valid_configuration_and_fits_small_window() {
+        let (mut app, _directory) = headless_app();
+        app.config.smoothing_ms = 4900.0;
+        app.config.ha_interval_ms = 59000;
+        app.config.lights[0].shape = Shape::Bulb {
+            center: Point { x: 0.5, y: 0.5 },
+            radius: 0.95,
+        };
+        let before = app.config.clone();
+        let ctx = egui::Context::default();
+        for size in [Vec2::new(1080.0, 700.0), Vec2::new(720.0, 480.0)] {
+            for _ in 0..2 {
+                let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+                assert!(!output.shapes.is_empty());
+                let rect = app.canvas_rect.unwrap();
+                assert!(
+                    rect.width() > 200.0 && rect.height() > 100.0,
+                    "canvas squeezed: {rect:?}"
+                );
+                assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(rect));
+                assert_eq!(app.config, before, "merely rendering changed the layout");
+            }
+        }
+    }
+
+    #[test]
+    fn headless_nudge_undo_redo_and_text_focus_are_independent() {
+        let (mut app, _directory) = headless_app();
+        app.config.lights[0].shape = Shape::Bulb {
+            center: Point { x: 0.5, y: 0.5 },
+            radius: 0.08,
+        };
+        let original = app.config.clone();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        let moved = app.config.clone();
+        assert_ne!(moved, original);
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::Z, command)],
+            command,
+        );
+        assert_eq!(app.config, original);
+        assert!(app.history.can_redo());
+        let redo = egui::Modifiers {
+            shift: true,
+            ..command
+        };
+        draw(&mut app, &ctx, size, vec![key(egui::Key::Z, redo)], redo);
+        assert_eq!(app.config, moved);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        // The current name's TextEdit appears before its canvas label.
+        let name = text_rect(&output, "Demo strip");
+        click(&mut app, &ctx, size, name.center());
+        assert!(ctx.wants_keyboard_input());
+        let before = app.config.lights[0].shape.clone();
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(
+            app.config.lights[0].shape, before,
+            "text cursor key moved light"
+        );
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::S, command)],
+            command,
+        );
+        let saved: Config =
+            serde_json::from_slice(&std::fs::read(&app.config_path).unwrap()).unwrap();
+        assert_eq!(saved, app.config);
+        assert_eq!(app.saved_config, app.config);
+    }
+
+    #[test]
+    fn headless_drag_is_one_undo_transaction() {
+        let (mut app, _directory) = headless_app();
+        app.config.lights[0].shape = Shape::Bulb {
+            center: Point { x: 0.5, y: 0.5 },
+            radius: 0.08,
+        };
+        let before = app.config.clone();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let start = app.canvas_rect.unwrap().center();
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            egui::Modifiers::NONE,
+        );
+        for offset in [20.0, 40.0, 60.0] {
+            draw(
+                &mut app,
+                &ctx,
+                size,
+                vec![egui::Event::PointerMoved(start + Vec2::new(offset, 0.0))],
+                egui::Modifiers::NONE,
+            );
+        }
+        let end = start + Vec2::new(60.0, 0.0);
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+        );
+        assert_ne!(app.config, before, "drag did not move marker");
+        app.undo(false);
+        assert_eq!(app.config, before);
+        assert!(!app.history.can_undo());
+    }
+
+    #[test]
+    fn coincident_markers_keep_selected_light_and_release_drag_state() {
+        let (mut app, _directory) = headless_app();
+        app.config.lights[0].shape = Shape::Bulb {
+            center: Point { x: 0.5, y: 0.5 },
+            radius: 0.08,
+        };
+        let mut second = app.config.lights[0].clone();
+        second.id = "second-marker".into();
+        second.name = "Selected bulb".into();
+        app.config.lights.push(second);
+        app.selected = Some(1);
+        let original = app.config.clone();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let start = app.canvas_rect.unwrap().center();
+        click(&mut app, &ctx, size, start);
+        assert_eq!(app.selected, Some(1));
+        assert!(app.drag.is_none(), "a click left active drag state");
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+        );
+        let end = start + Vec2::new(60.0, 0.0);
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![egui::Event::PointerMoved(end)],
+            egui::Modifiers::NONE,
+        );
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(app.config.lights[0], original.lights[0]);
+        assert_ne!(app.config.lights[1].shape, original.lights[1].shape);
+        assert!(app.drag.is_none());
+        app.undo(false);
+        assert_eq!(app.config, original);
+        assert!(!app.history.can_undo());
+    }
+
+    #[test]
+    fn preset_path_preserves_hardware_and_sampling_settings_and_has_one_undo() {
+        let (mut app, _directory) = headless_app();
+        app.config.lights[0].shape = Shape::Strip {
+            points: vec![Point { x: 0.1, y: 0.6 }, Point { x: 0.8, y: 0.4 }],
+            radius: 0.23,
+            reverse: true,
+        };
+        app.selected_point = 1;
+        let original = app.config.clone();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Place along desktop…").center(),
+        );
+        let output = if output.shapes.iter().any(|s| matches!(&s.shape, egui::epaint::Shape::Text(t) if t.galley.text() == "Full perimeter")) {
+            output
+        } else {
+            draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE)
+        };
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Full perimeter").center(),
+        );
+        assert_eq!(app.selected_point, 0);
+        let light = &app.config.lights[0];
+        assert_eq!(light.id, original.lights[0].id);
+        assert_eq!(light.route, original.lights[0].route);
+        assert_eq!(light.zones, original.lights[0].zones);
+        assert!(
+            matches!(&light.shape, Shape::Strip { radius, reverse: true, points }
+            if *radius == 0.23 && points.len() == 5 && points.first() == points.last())
+        );
+        assert!(app.config.validate().is_ok());
+        app.undo(false);
+        assert_eq!(app.config, original);
+        assert!(!app.history.can_undo());
+    }
+
+    #[test]
+    fn unicode_name_paste_respects_persisted_limit_and_undo() {
+        let (mut app, _directory) = headless_app();
+        let original = app.config.clone();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Demo strip").center(),
+        );
+        assert!(ctx.wants_keyboard_input());
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::A, command)],
+            command,
+        );
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![egui::Event::Paste("東京".repeat(100))],
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(app.config.lights[0].name, "東京".repeat(42) + "東");
+        assert!(app.config.validate().is_ok());
+        let name = app.config.lights[0].name.clone();
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert_eq!(
+            app.config.lights[0].name, name,
+            "rendering changed the name"
+        );
+        // Leave the editor so its text transaction becomes one layout Undo.
+        let point = app.canvas_rect.unwrap().left_bottom() + Vec2::new(12.0, -12.0);
+        click(&mut app, &ctx, size, point);
+        app.undo(false);
+        assert_eq!(app.config, original);
+    }
+
+    #[test]
+    fn discovery_cannot_be_retargeted_by_undo_or_a_stale_reply() {
+        let (mut app, _directory) = headless_app();
+        let original = app.config.clone();
+        app.config.ha_url = "https://server-b.example".into();
+        app.history.checkpoint(&original, &app.config);
+        app.busy = true;
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::Z, command)],
+            command,
+        );
+        assert_eq!(app.config.ha_url, "https://server-b.example");
+        app.config.ha_url = "https://server-a.example".into();
+        let before = app.config.clone();
+        app.results
+            .try_send(JobResult::Ha(
+                "https://server-b.example".into(),
+                Ok(vec![outputs::HaLight {
+                    entity_id: "light.server_b".into(),
+                    name: "Different server".into(),
+                    color_modes: vec!["rgb".into()],
+                    available: true,
+                }]),
+            ))
+            .unwrap();
+        app.poll_jobs();
+        assert_eq!(app.config, before);
+        assert!(!app.busy);
+        assert!(app.notice.contains("server changed"));
+    }
+
+    #[test]
+    fn headless_discovery_requires_selection_and_adds_only_chosen_light() {
+        let (mut app, _directory) = headless_app();
+        let original = app.config.clone();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        let light = |id: &str, name: &str| outputs::HaLight {
+            entity_id: format!("light.{id}"),
+            name: name.into(),
+            color_modes: vec!["rgb".into()],
+            available: true,
+        };
+        app.results
+            .try_send(JobResult::Ha(
+                app.config.ha_url.clone(),
+                Ok(vec![light("desk", "Desk lamp"), light("room", "Room lamp")]),
+            ))
+            .unwrap();
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert_eq!(app.config, original);
+        assert!(app.ha_picker.is_some());
+        // Global arrow shortcuts must not move the background layout while
+        // a discovery choice is open, even if its search field lacks focus.
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(app.config, original);
+        let checkbox = text_rect(&output, "Desk lamp").center();
+        click(&mut app, &ctx, size, checkbox);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let add = text_rect(&output, "Add 1 selected").center();
+        click(&mut app, &ctx, size, add);
+        assert!(app.ha_picker.is_none());
+        assert_eq!(app.config.lights.len(), original.lights.len() + 1);
+        assert_eq!(
+            app.config.lights.last().unwrap().route,
+            Route::HomeAssistant {
+                entity_id: "light.desk".into()
+            }
+        );
+        assert!(app.config.validate().is_ok());
+        app.undo(false);
+        assert_eq!(app.config, original);
+    }
+
+    #[test]
+    fn headless_export_copies_strict_layout_without_credentials_or_edits() {
+        let (mut app, _directory) = headless_app();
+        let original = app.config.clone();
+        app.token = "private-test-token-never-export".into();
+        app.layout_dialog = Some(layout_dialog::LayoutDialog::export(&app.config).unwrap());
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Copy JSON").center(),
+        );
+        let json = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(json) => Some(json),
+                _ => None,
+            })
+            .expect("export produced no clipboard command");
+        assert_eq!(config::decode_layout(json).unwrap(), original);
+        assert!(!json.contains(&app.token));
+        assert_eq!(app.config, original);
+        assert!(!app.history.can_undo());
+    }
+
+    #[test]
+    fn headless_import_is_validated_and_undoable_as_one_edit() {
+        let (mut app, _directory) = headless_app();
+        let original = app.config.clone();
+        let mut imported = original.clone();
+        imported.lights[0].name = "Imported strip".into();
+        imported.brightness = 0.4;
+        app.layout_dialog = Some(layout_dialog::LayoutDialog::from_json(
+            config::encode_layout(&imported).unwrap(),
+        ));
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(app.config, original, "modal allowed background movement");
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Use this layout").center(),
+        );
+        assert!(app.layout_dialog.is_none());
+        assert_eq!(app.config, imported);
+        assert_eq!(app.saved_config, original, "import unexpectedly persisted");
+        app.undo(false);
+        assert_eq!(app.config, original);
+        assert!(!app.history.can_undo());
+        app.undo(true);
+        assert_eq!(app.config, imported);
+    }
+
+    #[test]
+    fn headless_invalid_import_keeps_dialog_and_original_layout() {
+        let (mut app, _directory) = headless_app();
+        let original = app.config.clone();
+        let mut json: serde_json::Value =
+            serde_json::from_str(&config::encode_layout(&original).unwrap()).unwrap();
+        json["access_token"] = "not-a-layout-field".into();
+        app.layout_dialog = Some(layout_dialog::LayoutDialog::from_json(json.to_string()));
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Use this layout").center(),
+        );
+        assert!(app.layout_dialog.is_some());
+        assert_eq!(app.config, original);
+        assert!(!app.history.can_undo());
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text().contains("Could not import"))));
+    }
+
+    #[test]
+    fn reinspection_preserves_verified_mapping_and_rejects_shrunken_controller() {
+        let expected = Route::Wled {
+            host: "old.local".into(),
+            start: 20,
+            count: 40,
+            device_id: "AA:BB:CC:DD:EE:FF".into(),
+        };
+        let mut info = outputs::WledInfo {
+            name: "Desk".into(),
+            device_id: "aabbccddeeff".into(),
+            led_count: 120,
+            segments: vec![(0, 120)],
+        };
+        assert_eq!(
+            inspected_route(&expected, "new.local".into(), &info).unwrap(),
+            Route::Wled {
+                host: "new.local".into(),
+                start: 20,
+                count: 40,
+                device_id: info.device_id.clone()
+            }
+        );
+        info.led_count = 50;
+        assert!(inspected_route(&expected, "new.local".into(), &info).is_err());
+        info.device_id = "001122334455".into();
+        assert!(matches!(
+            inspected_route(&expected, "other.local".into(), &info).unwrap(),
+            Route::Wled {
+                start: 0,
+                count: 50,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn repeated_source_selection_preserves_saved_target() {

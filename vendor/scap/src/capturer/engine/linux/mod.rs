@@ -90,15 +90,12 @@ fn state_changed_callback(
     _old: StreamState,
     new: StreamState,
 ) {
-    match new {
-        StreamState::Error(e) => {
-            eprintln!("pipewire: State changed to error({e})");
-            user_data
-                .state
-                .failed
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        _ => {}
+    if let StreamState::Error(e) = new {
+        eprintln!("pipewire: State changed to error({e})");
+        user_data
+            .state
+            .failed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

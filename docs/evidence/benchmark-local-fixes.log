@@ -1,0 +1,2 @@
+SIMULATED CPU workload: 160x90 SDR,16 strips,968 zones,3000 iterations: 0.0533 ms/iteration
+{"command": ["target/release/lumen-desktop", "--benchmark"], "exit": 0, "wall_seconds": 0.25, "user_seconds": 0.162488, "system_seconds": 0.000998, "max_rss_mib": 13.96875, "samples": [{"seconds": 0.0, "rss_mib": 0.0, "cpu_seconds": 0.0}]}

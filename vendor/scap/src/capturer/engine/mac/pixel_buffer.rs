@@ -5,10 +5,11 @@ use core_video_sys::{
     CVPixelBufferGetPlaneCount, CVPixelBufferGetWidth, CVPixelBufferGetWidthOfPlane,
     CVPixelBufferLockBaseAddress, CVPixelBufferRef, CVPixelBufferUnlockBaseAddress,
 };
-use screencapturekit::{cm_sample_buffer::CMSampleBuffer, sc_types::SCFrameStatus};
+use screencapturekit::cm_sample_buffer::CMSampleBuffer;
 use screencapturekit_sys::cm_sample_buffer_ref::CMSampleBufferGetImageBuffer;
 use std::{ops::Deref, sync::mpsc};
 
+use super::{super::mac_frame_state::FrameStatus, pixelformat::explicit_frame_status};
 use crate::capturer::{engine::ChannelItem, RawCapturer};
 
 pub struct PixelBuffer {
@@ -78,23 +79,26 @@ impl PixelBuffer {
     }
 
     pub(crate) fn new(item: ChannelItem) -> Option<Self> {
+        if !matches!(
+            explicit_frame_status(&item.0),
+            FrameStatus::Complete | FrameStatus::Started
+        ) {
+            return None;
+        }
         unsafe {
             let display_time = pixel_buffer_display_time(&item.0);
             let pixel_buffer = sample_buffer_to_pixel_buffer(&item.0);
-            let (width, height) = pixel_buffer_bounds(pixel_buffer);
-
-            match item.0.frame_status {
-                SCFrameStatus::Complete | SCFrameStatus::Started | SCFrameStatus::Idle => {
-                    Some(Self {
-                        display_time,
-                        width,
-                        height,
-                        bytes_per_row: pixel_buffer_bytes_per_row(pixel_buffer),
-                        buffer: item.0,
-                    })
-                }
-                _ => None,
+            if pixel_buffer.is_null() {
+                return None;
             }
+            let (width, height) = pixel_buffer_bounds(pixel_buffer);
+            Some(Self {
+                display_time,
+                width,
+                height,
+                bytes_per_row: pixel_buffer_bytes_per_row(pixel_buffer),
+                buffer: item.0,
+            })
         }
     }
 }

@@ -52,10 +52,10 @@ fn main() -> anyhow::Result<()> {
         "Lumen Desktop",
         options,
         Box::new(move |_| {
-            Ok(Box::new(app::App::new(
-                smoke,
-                args.iter().any(|arg| arg == "--real-capture"),
-            )))
+            Ok(Box::new(
+                app::App::new(smoke, args.iter().any(|arg| arg == "--real-capture"))
+                    .map_err(|error| error.into_boxed_dyn_error())?,
+            ))
         }),
     )
     .map_err(|e| anyhow::anyhow!("Could not start desktop editor: {e}"))

@@ -2,7 +2,7 @@ pub mod engine;
 
 use std::{error::Error, sync::mpsc};
 
-use engine::ChannelItem;
+use engine::FrameReceiver;
 
 use crate::{
     frame::{Frame, FrameType},
@@ -76,7 +76,7 @@ pub struct Options {
 /// Screen capturer class
 pub struct Capturer {
     engine: engine::Engine,
-    rx: mpsc::Receiver<ChannelItem>,
+    rx: FrameReceiver,
 }
 
 #[derive(Debug)]
@@ -107,7 +107,7 @@ impl Capturer {
         note = "Use `build` instead of `new` to create a new capturer instance."
     )]
     pub fn new(options: Options) -> Capturer {
-        let (tx, rx) = mpsc::sync_channel(1);
+        let (tx, rx) = engine::channel();
         let engine = engine::Engine::new(&options, tx).expect("Failed to build capturer");
 
         Capturer { engine, rx }
@@ -123,7 +123,7 @@ impl Capturer {
             return Err(CapturerBuildError::PermissionNotGranted);
         }
 
-        let (tx, rx) = mpsc::sync_channel(1);
+        let (tx, rx) = engine::channel();
         let engine = engine::Engine::new(&options, tx)?;
 
         Ok(Capturer { engine, rx })
@@ -144,34 +144,54 @@ impl Capturer {
     /// Get the next captured frame
     pub fn get_next_frame(&self) -> Result<Frame, mpsc::RecvError> {
         loop {
+            if self.engine.has_backend_error() {
+                return Err(mpsc::RecvError);
+            }
             let res = self.rx.recv()?;
+            if self.engine.has_backend_error() {
+                return Err(mpsc::RecvError);
+            }
 
             if let Some(frame) = self.engine.process_channel_item(res) {
+                if self.engine.has_backend_error() {
+                    return Err(mpsc::RecvError);
+                }
                 return Ok(frame);
             }
         }
     }
 
     /// Wait at most `timeout` for a usable frame. A quiet source returns `Ok(None)`.
-    /// The producer queue holds one frame and never blocks a native callback.
+    /// The producer queue holds one frame and never waits for queue capacity.
     pub fn get_next_frame_timeout(
         &self,
         timeout: std::time::Duration,
     ) -> Result<Option<Frame>, mpsc::RecvTimeoutError> {
         let start = std::time::Instant::now();
         loop {
-            let item = match self
+            if self.engine.has_backend_error() {
+                return Err(mpsc::RecvTimeoutError::Disconnected);
+            }
+            let received = self
                 .rx
-                .recv_timeout(timeout.saturating_sub(start.elapsed()))
-            {
+                .recv_timeout(timeout.saturating_sub(start.elapsed()));
+            if self.engine.has_backend_error() {
+                return Err(mpsc::RecvTimeoutError::Disconnected);
+            }
+            let item = match received {
                 Ok(item) => item,
                 Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
                 Err(error) => return Err(error),
             };
-            // Drain only the currently queued item, so an active producer cannot
-            // keep this call spinning past its deadline.
+            // The macOS mailbox already selects the latest pending image. Do
+            // not drain another sample: a later Idle must not replace it.
+            // Other backends drain only one item, keeping the call bounded.
+            #[cfg(not(target_os = "macos"))]
             let item = self.rx.try_recv().unwrap_or(item);
             if let Some(frame) = self.engine.process_channel_item(item) {
+                if self.engine.has_backend_error() {
+                    return Err(mpsc::RecvTimeoutError::Disconnected);
+                }
                 return Ok(Some(frame));
             }
             if start.elapsed() >= timeout {

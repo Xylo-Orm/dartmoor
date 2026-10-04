@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/lib.rs (vendor/scap/target/debug/deps/scap-a042d5f17cb910e3)
+
+running 18 tests
+test capturer::engine::linux::tests::strips_offset_and_row_padding ... ok
+test capturer::engine::linux::tests::rejects_truncated_or_invalid_layouts ... ok
+test capturer::engine::mac_frame_state::tests::backend_error_invalidates_idle_reuse ... ok
+test capturer::engine::mac_frame_state::tests::idle_requires_a_valid_image_and_recovers_after_failed_conversion ... ok
+test capturer::engine::mac_frame_state::tests::mailbox_delivers_invalidation_before_idle_can_refresh_cached_image ... ok
+test capturer::engine::mac_frame_state::tests::only_explicit_known_statuses_are_accepted ... ok
+test capturer::engine::mac_mailbox::tests::blocked_receiver_wakes_for_disconnection ... ok
+test capturer::engine::mac_mailbox::tests::cloned_sender_keeps_receiver_connected_and_pending_item_is_delivered_first ... ok
+test capturer::engine::mac_mailbox::tests::blocked_receiver_wakes_for_image ... ok
+test capturer::engine::mac_mailbox::tests::idle_replaces_idle_and_can_follow_a_consumed_image ... ok
+test capturer::engine::mac_mailbox::tests::invalidation_replaces_pending_sample_and_survives_idle ... ok
+test capturer::engine::mac_mailbox::tests::latest_image_replaces_older_images_and_idle ... ok
+test capturer::engine::mac_mailbox::tests::queued_idle_then_complete_survives_subsequent_idle ... ok
+test capturer::engine::mac_mailbox::tests::replaced_ignored_and_receiver_dropped_items_are_released_once ... ok
+test frame::tests::test_convert_bgra_to_rgb ... ok
+test frame::tests::test_get_cropped_data ... ok
+test frame::tests::test_remove_alpha_channel ... ok
+test capturer::engine::mac_mailbox::tests::empty_mailbox_times_out_then_accepts_a_sample ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

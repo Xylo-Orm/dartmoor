@@ -1,0 +1,79 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/lumen_desktop-36b03b68939ed62f)
+
+running 61 tests
+test app::tests::repeated_source_selection_preserves_saved_target ... ok
+test app::tests::stale_inspection_does_not_overwrite_edited_or_deleted_route ... ok
+test app::tests::discovery_add_is_atomic_and_names_are_bounded ... ok
+test config::tests::mac_spellings_and_host_aliases_share_overlap_validation ... ok
+test app::tests::preview_identity_handles_new_sessions_and_clearing ... ok
+test config::tests::future_version_and_credentials_are_rejected ... ok
+test config::tests::legacy_configs_default_to_no_wled_restoration ... ok
+test config::tests::same_host_cannot_claim_conflicting_controller_identities ... ok
+test core::tests::averaging_occurs_in_linear_light_and_covers_whole_strip ... ok
+test core::tests::geometry_and_capture_dimensions_are_bounded ... ok
+test core::tests::encoding_roundtrips_srgb ... ok
+test capture::tests::padded_or_truncated_rejected ... ok
+test core::tests::reversed_strip_reverses_zones ... ok
+test core::tests::smoothing_depends_on_elapsed_time ... ok
+test capture::tests::deterministic_synthetic ... ok
+test config::tests::overlapping_routes_are_rejected_but_adjacent_ranges_are_valid ... ok
+test editor::tests::designated_insertion_preserves_retraced_segment_identity ... ok
+test editor::tests::drag_transaction_is_one_undo_and_redo_restores_its_final_state ... ok
+test editor::tests::insertion_projects_to_nearest_segment_and_preserves_bounds ... ok
+test editor::tests::duplicate_handles_do_not_interrupt_zone_placement ... ok
+test editor::tests::removal_retains_valid_path_and_nudges_clamp_selected_handle_only ... ok
+test editor::tests::history_evicts_oldest_transactions_and_keeps_redo_bounded ... ok
+test editor::tests::widescreen_zone_centers_use_physical_arclength ... ok
+test config::tests::loaded_ha_strips_must_sample_one_zone_covering_the_entire_path ... ok
+test editor::tests::zone_centers_follow_arclength_across_corners_and_reverse_output ... ok
+test engine::tests::capture_failure_calls_trait_cleanup ... ok
+test config::tests::config_roundtrip_and_invalid_preservation ... ok
+test outputs::tests::ha_capabilities_convert_and_skip_white_only_unavailable ... ok
+test outputs::tests::ddp_offsets_lengths_sequence_and_push ... ok
+test outputs::tests::ha_rgbw_and_rgbww_use_native_arrays_and_disable_white_channels ... ok
+test engine::tests::lost_capture_enters_error_not_idle_or_running ... ok
+test outputs::tests::ha_refresh_preserves_unchanged_cache_and_invalidates_changed_or_removed_targets ... ok
+test outputs::tests::ddp_local_udp_receives_complete_rgb_frame ... ok
+test outputs::tests::ha_state_events_update_availability_without_invalidating_own_rgb_updates ... ok
+test engine::tests::aliases_combine_into_one_physical_controller_frame ... ok
+test outputs::tests::urls_never_accept_embedded_secrets ... ok
+test outputs::tests::canceled_credential_call_retains_gate_until_native_call_returns ... ok
+test outputs::tests::wled_refuses_dmx_offsets_sequence_filter_and_realtime_override ... ok
+test outputs::tests::wled_requires_explicit_physical_indexing_configuration ... ok
+test outputs::tests::wled_requires_verified_finite_device_timeout_without_changing_config ... ok
+test outputs::tests::ha_fake_server_auth_discovery_ack_and_rejected_call ... ok
+test config::tests::future_and_oversized_files_survive_recovery_save ... ok
+test capture::tests::bgra_and_aspect ... ok
+test engine::tests::low_fps_worker_stop_wakes_pacing_and_cleans_up ... ok
+test app::tests::discovery_cannot_be_retargeted_by_undo_or_a_stale_reply ... ok
+test app::tests::headless_layout_preserves_valid_configuration_and_fits_small_window ... ok
+test app::tests::headless_drag_is_one_undo_transaction ... ok
+test app::tests::headless_nudge_undo_redo_and_text_focus_are_independent ... ok
+test outputs::tests::wled_failed_stop_release_remains_visible ... ok
+test outputs::tests::wled_restores_only_unchanged_observed_state ... ok
+test outputs::tests::wled_failed_finite_reset_is_retried_by_cleanup_without_indefinite_acquisition ... ok
+test engine::tests::permission_failure_releases_session_and_recovers ... ok
+test engine::tests::apply_during_capture_keeps_frames_and_scalar_smoothing ... ok
+test outputs::tests::wled_stop_before_first_frame_never_acquires_live_mode ... ok
+test outputs::tests::wled_refuses_frames_past_device_led_count_before_acquisition ... ok
+test outputs::tests::wled_saved_identity_prevents_dhcp_reassignment_from_acquiring_live ... ok
+test outputs::tests::wled_change_during_first_ddp_frame_cannot_be_adopted_and_restored_over ... ok
+test engine::tests::start_stop_and_latest_preview ... ok
+test outputs::tests::wled_finite_ddp_keepalive_uses_latest_frame_then_stale_and_cancel_release ... ok
+test outputs::tests::ha_stream_coalesces_and_never_sends_stale_frames ... ok
+test outputs::tests::credential_operations_survive_timeout_and_gate_reads_and_saves ... ok
+
+test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.00s
+
+     Running unittests src/main.rs (target/debug/deps/lumen_desktop-faf0eb1f7b32af6e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lumen_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

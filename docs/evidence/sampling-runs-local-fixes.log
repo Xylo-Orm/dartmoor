@@ -1,0 +1,38 @@
+before: broad: compile 314.618ms
+broad: sample 26.747ms/frame (120 iterations)
+VmHWM:	  394484 kB
+VmRSS:	  394484 kB
+broad: output 8 lights / 2048 zones, checksum 1275.712566
+after: broad: compile 224.136ms
+broad: sample 0.307ms/frame (120 iterations)
+VmHWM:	    6176 kB
+VmRSS:	    6176 kB
+broad: output 8 lights / 2048 zones, checksum 1275.713808
+before: narrow: compile 2.332ms
+narrow: sample 0.277ms/frame (1000 iterations)
+VmHWM:	    5080 kB
+VmRSS:	    5080 kB
+narrow: output 8 lights / 2048 zones, checksum 1277.101557
+after: narrow: compile 2.355ms
+narrow: sample 0.062ms/frame (1000 iterations)
+VmHWM:	    4020 kB
+VmRSS:	    4020 kB
+narrow: output 8 lights / 2048 zones, checksum 1277.101561
+before: bulbs: compile 0.916ms
+bulbs: sample 0.283ms/frame (1000 iterations)
+VmHWM:	    5176 kB
+VmRSS:	    5176 kB
+bulbs: output 8 lights / 2048 zones, checksum 1276.347415
+after: bulbs: compile 0.417ms
+bulbs: sample 0.018ms/frame (1000 iterations)
+VmHWM:	    3540 kB
+VmRSS:	    3540 kB
+bulbs: output 8 lights / 2048 zones, checksum 1276.360210
+Compared 150624 zone colors across 6 dimensions × 4 radii × 4 frame patterns; maximum old/new linear channel delta 0.000211477, encoded delta 1/255
+
+Final source after LUT initialization hoist and u16 compile-time guard:
+broad: compile 218.782ms; sample 0.301ms/frame (120 iterations); VmHWM 6092 KiB
+narrow: compile 2.280ms; sample 0.061ms/frame (1000 iterations); VmHWM 4064 KiB
+bulbs: compile 0.407ms; sample 0.013ms/frame (1000 iterations); VmHWM 3452 KiB
+Compared 150624 zone colors across 6 dimensions × 4 radii × 4 frame patterns; maximum old/new linear channel delta 0.000211477, encoded delta 1/255
+Final verification: 9/9 release core tests passed (0.22s); isolated core clippy --lib --tests -- -D warnings passed; git diff --check -- src/core.rs passed.

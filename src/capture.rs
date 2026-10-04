@@ -41,7 +41,9 @@ pub fn sources() -> Vec<Source> {
 pub trait CaptureSource {
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>>;
     fn stop(&mut self);
-    /// False means unchanged content cannot be distinguished from stream loss.
+    /// True only when the most recent `next_frame` call returned None after an
+    /// explicit backend notification that the previous image is unchanged.
+    /// Timeouts and errors must clear this signal; silence is not liveness.
     fn confirms_idle(&self) -> bool {
         false
     }
@@ -90,20 +92,26 @@ impl CaptureSource for Synthetic {
         Ok(Some(synthetic_frame(self.started.elapsed().as_secs_f32())))
     }
     fn stop(&mut self) {}
-    fn confirms_idle(&self) -> bool {
-        true
-    }
 }
 struct Desktop {
     capturer: scap::capturer::Capturer,
     stopped: bool,
+    idle: bool,
 }
 impl CaptureSource for Desktop {
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>> {
+        self.idle = false;
         match self.capturer.get_next_frame_timeout(timeout)? {
-            Some(v) => Ok(Some(normalize(v)?)),
+            Some(v) => {
+                let frame = normalize_capture(v)?;
+                self.idle = frame.is_none();
+                Ok(frame)
+            }
             None => Ok(None),
         }
+    }
+    fn confirms_idle(&self) -> bool {
+        self.idle
     }
     fn stop(&mut self) {
         if !self.stopped {
@@ -167,7 +175,22 @@ pub fn open(selection: &CaptureSelection, fps: u32) -> Result<Box<dyn CaptureSou
     Ok(Box::new(Desktop {
         capturer,
         stopped: false,
+        idle: false,
     }))
+}
+
+/// scap's macOS BGRA path carries ScreenCaptureKit Idle notifications as an
+/// empty, zero-sized frame. They contain no image to normalize, and must not
+/// turn an ordinary unchanged desktop into a malformed-buffer error. Do not
+/// treat other malformed frames as idle. Desktop exposes this explicit signal
+/// through `confirms_idle`, separately from a retrieval timeout.
+fn normalize_capture(frame: scap::frame::Frame) -> Result<Option<Frame>> {
+    if matches!(&frame, scap::frame::Frame::BGRA(frame)
+        if frame.width == 0 && frame.height == 0 && frame.data.is_empty())
+    {
+        return Ok(None);
+    }
+    normalize(frame).map(Some)
 }
 
 /// SDR/sRGB assumption: scap 0.0.8 exposes no color-space metadata. Reject YUV.
@@ -230,6 +253,33 @@ fn reduce(bytes: &[u8], w: i32, h: i32, channels: usize, order: [usize; 3]) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn synthetic_pacing_timeout_does_not_claim_backend_idle() {
+        let mut source = Synthetic::new(1);
+        assert!(source.next_frame(Duration::ZERO).unwrap().is_some());
+        assert!(source.next_frame(Duration::ZERO).unwrap().is_none());
+        assert!(!source.confirms_idle());
+    }
+
+    #[test]
+    fn macos_idle_marker_is_not_an_image_or_malformed_capture() {
+        let bgra = |width, height, data| {
+            scap::frame::Frame::BGRA(scap::frame::BGRAFrame {
+                display_time: 123,
+                width,
+                height,
+                data,
+            })
+        };
+        assert!(normalize_capture(bgra(0, 0, vec![])).unwrap().is_none());
+        assert!(normalize_capture(bgra(0, 1, vec![])).is_err());
+        assert!(normalize_capture(bgra(0, 0, vec![0])).is_err());
+        let image = normalize_capture(bgra(1, 1, vec![10, 20, 200, 255]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(image.pixels, vec![[200, 20, 10]]);
+    }
+
     #[test]
     fn padded_or_truncated_rejected() {
         assert!(reduce(&[0; 7], 2, 1, 4, [2, 1, 0]).is_err());
