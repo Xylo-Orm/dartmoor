@@ -119,6 +119,11 @@ pub async fn inspect_wled(host: &str) -> Result<WledInfo> {
 }
 
 fn parse_wled(value: &Value) -> Result<WledInfo> {
+    if value.pointer("/state/lor").and_then(Value::as_u64) != Some(0) {
+        bail!(
+            "Disable WLED realtime override (lor=0) before streaming; its state must be readable"
+        );
+    }
     let info = value
         .get("info")
         .context("WLED response has no device info")?;
@@ -215,6 +220,14 @@ fn finite_timeout_from_config(cfg: &Value) -> Result<Duration> {
     }
     if cfg.pointer("/if/live/offset").and_then(Value::as_i64) != Some(0) {
         bail!("Set WLED realtime LED offset to zero in Sync settings before streaming");
+    }
+    // WLED applies the DMX address even to DDP, and its optional sequence
+    // filter assumes at most four packets per frame. Our frames may be larger.
+    if cfg.pointer("/if/live/dmx/addr").and_then(Value::as_u64) != Some(1) {
+        bail!("Set WLED DMX start address to 1 in Sync settings for physical LED mapping");
+    }
+    if cfg.pointer("/if/live/dmx/seqskip").and_then(Value::as_bool) != Some(false) {
+        bail!("Disable WLED Skip out-of-sequence packets in Sync settings before streaming");
     }
     Ok(Duration::from_millis(units * 100))
 }
@@ -383,6 +396,13 @@ fn spawn_wled_destination(
             {
                 Ok(()) => return,
                 Err(e) => {
+                    if *stop.borrow()
+                        || stop.has_changed().is_err()
+                        || pixels.has_changed().is_err()
+                    {
+                        status.send_replace(format!("WLED: stopped; {e}"));
+                        return;
+                    }
                     status.send_replace(format!("WLED: {e}; retrying in {retry_seconds}s"));
                 }
             }
@@ -1114,9 +1134,9 @@ mod tests {
                 };
                 requests_tx.send((route.clone(), body)).unwrap();
                 let response = if route.contains(" /json ") {
-                    json!({"info":{"name":"Fake WLED", "mac":"test-mac", "leds":{"count":led_count}}, "state":{"seg":[{"start":0,"stop":led_count}]}})
+                    json!({"info":{"name":"Fake WLED", "mac":"test-mac", "leds":{"count":led_count}}, "state":{"lor":0,"seg":[{"start":0,"stop":led_count}]}})
                 } else if route.contains(" /json/cfg ") {
-                    json!({"if":{"live":{"en":true,"timeout":25,"mso":false,"rlm":false,"offset":0}}})
+                    json!({"if":{"live":{"en":true,"timeout":25,"mso":false,"rlm":false,"offset":0,"dmx":{"addr":1,"seqskip":false}}}})
                 } else if route.starts_with("GET /json/state ") {
                     states.next().unwrap_or_else(|| json!({"on":true,"bri":128,"transition":0,"mainseg":0,"seg":[{"id":0,"start":0,"stop":led_count}]}))
                 } else { json!({"success":true}) }.to_string();
@@ -1128,6 +1148,74 @@ mod tests {
             }
         });
         (url, requests_rx, task)
+    }
+
+    #[test]
+    fn wled_refuses_dmx_offsets_sequence_filter_and_realtime_override() {
+        let safe = json!({"if":{"live":{"en":true,"timeout":25,"mso":false,"rlm":false,"offset":0,"dmx":{"addr":1,"seqskip":false}}}});
+        for value in [json!(0), json!(2), json!(4), json!(-1), Value::Null] {
+            let mut cfg = safe.clone();
+            cfg["if"]["live"]["dmx"]["addr"] = value;
+            assert!(finite_timeout_from_config(&cfg).is_err());
+        }
+        for value in [json!(true), json!(0), Value::Null] {
+            let mut cfg = safe.clone();
+            cfg["if"]["live"]["dmx"]["seqskip"] = value;
+            assert!(finite_timeout_from_config(&cfg).is_err());
+        }
+        let mut state =
+            json!({"info":{"name":"Mock","mac":"aa","leds":{"count":10}},"state":{"lor":0}});
+        assert!(parse_wled(&state).is_ok());
+        for value in [json!(1), json!(2), Value::Null] {
+            state["state"]["lor"] = value;
+            assert!(
+                parse_wled(&state)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("override")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn wled_failed_stop_release_remains_visible() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (url, _requests, server) = fake_wled(10, false).await;
+        let (_pixels, pixels_rx) = watch::channel(Some(OutputFrame {
+            colors: vec![[1, 2, 3]; 10],
+            produced: Instant::now(),
+        }));
+        let (stop, stop_rx) = watch::channel(false);
+        let (status, observed) = watch::channel(String::new());
+        let task = spawn_wled_destination(
+            url,
+            pixels_rx,
+            stop_rx,
+            status,
+            false,
+            String::new(),
+            receiver.local_addr().unwrap().port(),
+        );
+        let mut packet = [0; 2048];
+        timeout(Duration::from_secs(2), receiver.recv(&mut packet))
+            .await
+            .unwrap()
+            .unwrap();
+        // Acquisition succeeded. Loss of the mock HTTP server now makes the
+        // explicit release fail, even though the finite DDP lease still expires.
+        server.abort();
+        let _ = server.await;
+        stop.send_replace(true);
+        timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            observed.borrow().contains("release failed"),
+            "{}",
+            observed.borrow().as_str()
+        );
+        assert!(!observed.borrow().contains("retrying"));
     }
 
     #[tokio::test]
@@ -1257,7 +1345,7 @@ mod tests {
 
     #[test]
     fn wled_requires_verified_finite_device_timeout_without_changing_config() {
-        let cfg = |timeout| json!({"if":{"live":{"en":true,"timeout":timeout,"mso":false,"rlm":false,"offset":0}}});
+        let cfg = |timeout| json!({"if":{"live":{"en":true,"timeout":timeout,"mso":false,"rlm":false,"offset":0,"dmx":{"addr":1,"seqskip":false}}}});
         assert_eq!(
             finite_timeout_from_config(&cfg(25)).unwrap(),
             Duration::from_millis(2500)
@@ -1273,8 +1361,7 @@ mod tests {
 
     #[test]
     fn wled_requires_explicit_physical_indexing_configuration() {
-        let safe =
-            json!({"if":{"live":{"en":true,"timeout":25,"mso":false,"rlm":false,"offset":0}}});
+        let safe = json!({"if":{"live":{"en":true,"timeout":25,"mso":false,"rlm":false,"offset":0,"dmx":{"addr":1,"seqskip":false}}}});
         assert!(finite_timeout_from_config(&safe).is_ok());
         for (key, unsafe_values) in [
             ("mso", vec![json!(true), json!(0), Value::Null]),

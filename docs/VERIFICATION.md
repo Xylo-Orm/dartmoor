@@ -35,4 +35,18 @@ UI interaction coverage, keyring backend availability and native platform runtim
 
 Final available synthetic measurements (`demo-optimized.log`, `benchmark-optimized.log`): default8-zone mock strip,30fps,8s produced240frames; user0.0636s/system0.0051s (~0.83% of one logical CPU including process startup/cleanup), stable sampledRSS6.31MiB and peak childRSS13.90MiB. Sample/encode processing about0.20ms/frame. The16-strip/968-zone benchmark measured0.2820ms/iteration across3000iterations. These figures isolate synthetic capture and sampling; they do not include physical output latency. Earlier visible/minimized synthetic UI evidence remains120/240/360frames and~166MiB peakRSS, with phase estimates above. Local DDP regression observes12successive keepalives within650ms and newest-color replacement, with a33msconfigured cadence; no hardware cadence is claimed.
 
-Final quality: independent architecture8.2/10, QA8.1/10; overall8.1/10. One revision attempt used. No unresolved critical/high finding; platform, hardware, full interaction and final real-capture performance gaps remain explicit.
+Revision1 quality: independent architecture8.2/10, QA8.1/10; overall8.1/10. One revision attempt used. No unresolved critical/high finding; platform, hardware, full interaction and final real-capture performance gaps remain explicit.
+
+
+## Revision2 final verification — 2026-10-04
+
+This follow-up deliberately used only Linux compilation and pure, synthetic or loopback-mock checks. No real capture, native UI interaction, native keyring, physical-light, Windows or macOS testing was performed. Historical measurements above were not rerun and do not measure the new revision.
+
+- **Linux release build:** passed with `cargo build --offline --locked --release`; see `evidence/build-revision2.log`. Lockfile retained.
+- **Formatting and strict lint:** `cargo fmt --check` and `cargo clippy --offline --all-targets -- -D warnings` passed.
+- **Automated application tests:**49 passed,0 failed; see `evidence/tests-revision2.log`. The lead's initial sandbox run passed37 tests and failed10 mock socket binds with permission errors. The authorized localhost-only rerun passed all49 after the final regressions landed. Both independent reviewers also ran passing final49-test suites.
+- **Capture-library unit tests:**5 passed; only packed-buffer/layout helper tests, not actual screen capture.
+- **New coverage:** stale inspection results, imported names and capacity failures, source selection, preview identities, capture cleanup on error, interruptible1fps pacing, in-flight configuration edits and preserved smoothing, credential timeout/cancellation exclusion, HA refresh invalidation, WLED physical mapping/DMX/sequence/override policy, first-frame restoration race, and visible failed release after mock disconnection.
+- **Manual UI / real screen capture / physical lights / Windows/macOS:** not tested in this revision, as requested. No updated performance claim is made.
+
+Independent final architecture score8.4/10 and QA score8.3/10; overall8.3/10 (lower score). Two of three permitted revision attempts used. No unresolved critical/high finding. Native runtime/hardware evidence, compositor differences, noncancelable OS credential calls, and non-atomic WLED restoration remain documented limits.

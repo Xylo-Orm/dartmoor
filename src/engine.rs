@@ -210,14 +210,16 @@ impl OutputGroup {
     }
     async fn shutdown(mut self) -> Vec<(String, String)> {
         self.stop.send_replace(true);
-        futures_util::future::join_all(std::mem::take(&mut self.tasks).into_iter().map(|mut task| async move {
-            if tokio::time::timeout(Duration::from_secs(8), &mut task)
-                .await
-                .is_err()
-            {
-                task.abort();
-            }
-        }))
+        futures_util::future::join_all(std::mem::take(&mut self.tasks).into_iter().map(
+            |mut task| async move {
+                if tokio::time::timeout(Duration::from_secs(8), &mut task)
+                    .await
+                    .is_err()
+                {
+                    task.abort();
+                }
+            },
+        ))
         .await;
         std::mem::take(&mut self.statuses)
             .into_iter()
@@ -681,6 +683,174 @@ mod tests {
             vec![[255, 0, 0], [255, 0, 0], [0, 0, 255], [0, 0, 255]]
         );
     }
+    struct TrackedSource {
+        stopped: Arc<AtomicBool>,
+        fail: bool,
+    }
+    impl capture::CaptureSource for TrackedSource {
+        fn next_frame(&mut self, _: Duration) -> anyhow::Result<Option<Frame>> {
+            anyhow::ensure!(!self.fail, "injected capture failure");
+            Ok(Some(Frame {
+                width: 2,
+                height: 2,
+                pixels: vec![[255, 0, 0]; 4],
+            }))
+        }
+        fn stop(&mut self) {
+            self.stopped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn capture_failure_calls_trait_cleanup() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let observed = stopped.clone();
+        let factory: CaptureFactory = Arc::new(move |_, _| {
+            Ok(Box::new(TrackedSource {
+                stopped: observed.clone(),
+                fail: true,
+            }))
+        });
+        let (_, config) = watch::channel(Arc::new(Config::default()));
+        let (frames, _) = watch::channel(None);
+        assert!(process_capture(config, &AtomicBool::new(false), frames, 1, factory).is_err());
+        assert!(stopped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn low_fps_worker_stop_wakes_pacing_and_cleans_up() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let observed = stopped.clone();
+        let factory: CaptureFactory = Arc::new(move |_, _| {
+            Ok(Box::new(TrackedSource {
+                stopped: observed.clone(),
+                fail: false,
+            }))
+        });
+        let (frames, mut received) = watch::channel(None);
+        let (events, _) = mpsc::channel(8);
+        let config = Config {
+            fps: 1,
+            ..Default::default()
+        };
+        let worker = worker(Arc::new(config), frames, events, 1, factory);
+        tokio::time::timeout(Duration::from_secs(2), received.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        let handle = worker.stop();
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while !handle.is_finished() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        handle.join().unwrap();
+        assert!(stopped.load(Ordering::SeqCst));
+    }
+
+    struct GatedSource {
+        entered: std::sync::mpsc::SyncSender<()>,
+        permit: std::sync::mpsc::Receiver<()>,
+        count: usize,
+    }
+    impl capture::CaptureSource for GatedSource {
+        fn next_frame(&mut self, timeout: Duration) -> anyhow::Result<Option<Frame>> {
+            let _ = self.entered.try_send(());
+            if self.permit.recv_timeout(timeout).is_err() {
+                return Ok(None);
+            }
+            self.count += 1;
+            let color = if self.count == 1 {
+                [255, 0, 0]
+            } else {
+                [0, 0, 255]
+            };
+            Ok(Some(Frame {
+                width: 2,
+                height: 2,
+                pixels: vec![color; 4],
+            }))
+        }
+        fn stop(&mut self) {}
+    }
+
+    #[tokio::test]
+    async fn apply_during_capture_keeps_frames_and_scalar_smoothing() {
+        let (entered, waiting) = std::sync::mpsc::sync_channel(1);
+        let (permit, permits) = std::sync::mpsc::channel();
+        let source = std::sync::Mutex::new(Some(GatedSource {
+            entered,
+            permit: permits,
+            count: 0,
+        }));
+        let factory: CaptureFactory =
+            Arc::new(move |_, _| Ok(Box::new(source.lock().unwrap().take().unwrap())));
+        let (commands, rx) = mpsc::channel(8);
+        let (snapshots, mut state) = watch::channel(Snapshot::default());
+        let task = tokio::spawn(run_with_factory(rx, snapshots, factory));
+        let mut config = Config {
+            smoothing_ms: 5000.0,
+            brightness: 1.0,
+            ..Default::default()
+        };
+        commands.send(Command::Start(config.clone())).await.unwrap();
+        permit.send(()).unwrap();
+        await_state(&mut state, SessionState::Running).await;
+        assert_eq!(state.borrow().colors[0][0], [255, 0, 0]);
+        // The next retrieval has already borrowed the old config. Apply new
+        // tuning while it waits; its eventual frame must still be accepted.
+        while waiting.try_recv().is_ok() {}
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while waiting.try_recv().is_err() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        config.lights[0].name = "renamed while waiting".into();
+        commands.send(Command::Apply(config.clone())).await.unwrap();
+        // An observable command barrier avoids relying on scheduling sleeps.
+        let mut invalid = config.clone();
+        invalid.fps = 0;
+        commands.send(Command::Apply(invalid)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                state.changed().await.unwrap();
+                if state.borrow().message.contains("fps") || state.borrow().message.contains("FPS")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        permit.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while state.borrow().frames < 2 {
+                state.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        permit.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while state.borrow().frames < 3 {
+                state.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        let color = state.borrow().colors[0][0];
+        assert!(
+            color[0] > color[2],
+            "scalar update reset smoothing: {color:?}"
+        );
+        commands.send(Command::Shutdown).await.unwrap();
+        task.await.unwrap();
+    }
+
     struct Interrupted;
     impl capture::CaptureSource for Interrupted {
         fn next_frame(&mut self, _: Duration) -> anyhow::Result<Option<Frame>> {
