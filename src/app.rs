@@ -498,7 +498,7 @@ if ui.button("+ Mock strip").clicked(){self.add("Simulated strip".into(),Route::
                 .map(|c| Color32::from_rgb(c[0], c[1], c[2]))
                 .unwrap_or(Color32::YELLOW);
             let selected = self.selected == Some(i);
-            let stroke = Stroke::new(if selected { 3.0 } else { 1.5 }, color);
+            let stroke = Stroke::new(if selected { 3.0_f32 } else { 1.5_f32 }, color);
             match &l.shape {
                 Shape::Bulb { center, radius } => {
                     let p = screen(*center);
