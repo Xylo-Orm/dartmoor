@@ -1,5 +1,21 @@
 # Verification evidence
 
+## Native CI repair — 2026-10-05
+
+The published editor/lifecycle batch `13a7681` failed [run37238750940](https://github.com/Xylo-Orm/dartmoor/actions/runs/37238750940) on all three runners. Formatting passed, but strict Clippy rejected seven unsuffixed float literals passed to `Stroke::new` in `src/app.rs` and `src/app/panels.rs` (`float-literal-f32-fallback`). Tests and release builds were skipped, not failed. CI used Rust1.99.0 while earlier local checks used Rust1.96.0. macOS also printed inherited `objc` macro warnings; those were not the failing diagnostics. Original job/step conclusions and fatal diagnostics are preserved in `evidence/ci-13a7681-failure.json` and `.log`.
+
+The repair specifies `f32` for those seven stroke widths without changing their values or suppressing warnings. A shared `rust-toolchain.toml` pins Rust1.99.0 with rustfmt/Clippy; the native workflow explicitly installs the file-selected toolchain, then reports it, instead of independently selecting moving stable. Rustup's toolchain-file behavior is documented in [its primary documentation](https://rust-lang.github.io/rustup/overrides.html#the-toolchain-file). Linux CI now also runs standalone vendored capture formatting and strict lint; all platforms retain the helper tests. Cargo dependencies and lockfile are unchanged. Rust1.88 remains the declared minimum, not a separately tested compiler claim.
+
+Local Linux checks on Rust1.99.0 (`b940084d7`, x86_64) pass:
+
+- Application all-target tests:109 passed,0 failed; `evidence/tests-ci-repair.log`. Network tests use localhost mocks only.
+- Vendored scap library tests:18 passed,0 failed; `evidence/scap-ci-repair.log`.
+- Application and standalone vendored all-target strict Clippy: passed; `evidence/clippy-ci-repair.log`, `evidence/scap-clippy-ci-repair.log`.
+- Both formatting scopes and `git diff --check`: passed.
+- Linux release bins/examples: passed; `evidence/build-ci-repair.log`.
+
+Two independent GPT-6 Astra reviews accept the corrected repair at architecture9.1/10 and QA9.5/10 (overall scoped9.1/10). One corrective pass automated Linux vendor checks and replaced implicit installation through `rustup show` with an explicit installation command; see `evidence/install-ci-repair.log`, `evidence/toolchain-ci-repair.log` and [review history](REVIEW.md#published-native-ci-repair--2026-10-05). QA also independently proved installation in an empty temporary rustup home. The new native CI results will be assessed after publication. These checks add no native UI, real screen capture, physical-light, keyring or performance measurements. Earlier results below are historical and retain the compiler/commit scope stated at the time.
+
 Recorded 2026-10-03 on Linux x86_64, Rust1.96.0, PipeWire1.6.8, Hyprland Wayland, Intel i7-12700KF (20 logical CPUs), ~32GiB RAM. Tests use simulated images and loopback mock devices unless explicitly stated. Raw evidence files are in `docs/evidence/`.
 
 ## Initial implementation

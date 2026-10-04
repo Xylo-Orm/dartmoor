@@ -510,11 +510,11 @@ impl App {
                 let y = rect.top() + rect.height() * step as f32 / 8.0;
                 painter.line_segment(
                     [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                    Stroke::new(1.0, Color32::from_gray(38)),
+                    Stroke::new(1.0_f32, Color32::from_gray(38)),
                 );
                 painter.line_segment(
                     [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-                    Stroke::new(1.0, Color32::from_gray(38)),
+                    Stroke::new(1.0_f32, Color32::from_gray(38)),
                 );
             }
             painter.text(
@@ -551,7 +551,7 @@ impl App {
                     painter.circle_stroke(
                         pos,
                         *radius * rect.width().min(rect.height()),
-                        Stroke::new(1.0, marker),
+                        Stroke::new(1.0_f32, marker),
                     );
                     handles.push((index, 0, pos));
                 }
@@ -570,7 +570,7 @@ impl App {
                                 marker.gamma_multiply(0.12),
                             ),
                         );
-                        painter.line_segment([a, b], Stroke::new(2.0, marker));
+                        painter.line_segment([a, b], Stroke::new(2.0_f32, marker));
                     }
                     for (point, position) in points.iter().enumerate() {
                         handles.push((index, point, screen(*position)));
@@ -581,7 +581,7 @@ impl App {
                         (points[points.len() - 2], points[points.len() - 1])
                     };
                     let vector = (screen(end) - screen(start)) * 0.22;
-                    painter.arrow(screen(end) - vector, vector, Stroke::new(2.5, marker));
+                    painter.arrow(screen(end) - vector, vector, Stroke::new(2.5_f32, marker));
                 }
             }
             if self.show_zones {
@@ -633,7 +633,7 @@ impl App {
             painter.circle_stroke(
                 *position,
                 if focused { 9.0 } else { 7.0 },
-                Stroke::new(2.0, if focused { ACCENT } else { Color32::WHITE }),
+                Stroke::new(2.0_f32, if focused { ACCENT } else { Color32::WHITE }),
             );
             if matches!(self.config.lights[*index].shape, Shape::Strip { .. }) {
                 painter.text(

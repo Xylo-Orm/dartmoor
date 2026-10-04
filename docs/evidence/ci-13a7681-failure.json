@@ -1,0 +1,196 @@
+{
+  "conclusion": "failure",
+  "headSha": "13a76818c65607ffa5e5703c4c8b10080eb79554",
+  "jobs": [
+    {
+      "name": "native (macos-14)",
+      "conclusion": "failure",
+      "url": "https://github.com/Xylo-Orm/dartmoor/actions/runs/37238750940/job/111543002204",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@stable",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run Swatinem/rust-cache@v2",
+          "conclusion": "success"
+        },
+        {
+          "name": "Linux development libraries",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo fmt --all -- --check",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Run cargo test --locked",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo test --manifest-path vendor/scap/Cargo.toml --lib",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo build --locked --release",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run Swatinem/rust-cache@v2",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "native (ubuntu-24.04)",
+      "conclusion": "failure",
+      "url": "https://github.com/Xylo-Orm/dartmoor/actions/runs/37238750940/job/111543002286",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@stable",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run Swatinem/rust-cache@v2",
+          "conclusion": "success"
+        },
+        {
+          "name": "Linux development libraries",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo fmt --all -- --check",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Run cargo test --locked",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo test --manifest-path vendor/scap/Cargo.toml --lib",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo build --locked --release",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run Swatinem/rust-cache@v2",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "native (windows-latest)",
+      "conclusion": "failure",
+      "url": "https://github.com/Xylo-Orm/dartmoor/actions/runs/37238750940/job/111543002315",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@stable",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run Swatinem/rust-cache@v2",
+          "conclusion": "success"
+        },
+        {
+          "name": "Linux development libraries",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo fmt --all -- --check",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo clippy --locked --all-targets -- -D warnings",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Run cargo test --locked",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo test --manifest-path vendor/scap/Cargo.toml --lib",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run cargo build --locked --release",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run Swatinem/rust-cache@v2",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "url": "https://github.com/Xylo-Orm/dartmoor/actions/runs/37238750940"
+}

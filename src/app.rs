@@ -418,7 +418,7 @@ impl App {
             style.visuals.panel_fill = Color32::from_rgb(23, 30, 41);
             style.visuals.window_fill = Color32::from_rgb(28, 36, 48);
             style.visuals.selection.bg_fill = Color32::from_rgb(36, 78, 104);
-            style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+            style.visuals.selection.stroke = Stroke::new(1.0_f32, ACCENT);
             ctx.set_style(style);
             self.styled = true;
         }

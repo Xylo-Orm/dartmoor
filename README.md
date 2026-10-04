@@ -4,7 +4,7 @@ A native Rust editor that samples one desktop/window and synchronizes WLED contr
 
 ## Build and run
 
-Rust 1.88+; the lockfile pins compatible dependencies. Linux requires PipeWire/SPA headers, D-Bus, libclang, Wayland, EGL and xkbcommon development libraries.
+Install Rust using rustup. The repository's `rust-toolchain.toml` selects Rust 1.99.0, rustfmt and Clippy for both development and CI; rustup installs them when needed. Run the verification commands below before publishing changes. `Cargo.toml` declares Rust 1.88 as the minimum, but that minimum is not separately verified by the current matrix. The lockfile pins dependencies. Linux requires PipeWire/SPA headers, D-Bus, libclang, Wayland, EGL and xkbcommon development libraries.
 
 ```sh
 # Debian/Ubuntu
@@ -14,7 +14,7 @@ cargo build --locked --release
 cargo run --locked --release
 ```
 
-Windows: install Rust stable with MSVC and Visual Studio C++ build tools, then the same Cargo commands. macOS: install Xcode command-line tools and Rust stable; requires macOS 12.3+ ScreenCaptureKit. Grant Screen Recording permission in System Settings, restart after a grant if required. Native Windows/macOS runtime behavior remains unverified until tested there; CI builds do not prove capture works.
+Windows: install rustup with the MSVC host and Visual Studio C++ build tools, then the same Cargo commands. macOS: install Xcode command-line tools and rustup; requires macOS 12.3+ ScreenCaptureKit. Grant Screen Recording permission in System Settings, restart after a grant if required. Native Windows/macOS runtime behavior remains unverified until tested there; CI builds do not prove capture works.
 
 Linux Wayland needs a functioning `xdg-desktop-portal` and compositor-specific backend, PipeWire, and a logged-in graphical D-Bus session. Do not run with sudo. Start opens the portal chooser; select a single display or window. The app does not silently select a display or promise silent permission restoration. No X11 capture fallback is included. Linux source enumeration is deliberately delegated to the portal. Windows/macOS can refresh and select enumerated sources.
 

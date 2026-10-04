@@ -1,0 +1,408 @@
+Source: https://github.com/Xylo-Orm/dartmoor/actions/runs/37238750940
+native (ubuntu-24.04)	Run dtolnay/rust-toolchain@stable	2026-10-04T22:06:55.5632413Z rustc 1.99.0 (b940084d7 2026-09-28)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	﻿2026-10-04T22:07:07.6541780Z ##[group]Run cargo clippy --locked --all-targets -- -D warnings
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.6542420Z cargo clippy --locked --all-targets -- -D warnings
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.6595540Z shell: /bin/bash -e {0}
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.6595860Z env:
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.6596090Z   CARGO_HOME: /Users/runner/.cargo
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.6611310Z   CARGO_INCREMENTAL: 0
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.6611670Z   CARGO_TERM_COLOR: always
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.6611940Z   CACHE_ON_FAILURE: false
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.6612240Z ##[endgroup]
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:07.9037540Z     Updating crates.io index
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.5988700Z     Checking scap v0.0.8 (/Users/runner/work/dartmoor/dartmoor/vendor/scap)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8943240Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8944230Z   --> vendor/scap/src/targets/mac/mod.rs:15:26
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8944640Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8945540Z 15 |         let count: u64 = msg_send![screens, count];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8946490Z    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8946830Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8947320Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8948490Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8949320Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8950390Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8951310Z    = note: `#[warn(unexpected_cfgs)]` on by default
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8952170Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8952730Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8952920Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8953390Z   --> vendor/scap/src/targets/mac/mod.rs:18:30
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8953790Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8954210Z 18 |             let screen: id = msg_send![screens, objectAtIndex: i];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8954780Z    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8955170Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8955440Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8956140Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8956850Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8957720Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8958780Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8959300Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8959490Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8960040Z   --> vendor/scap/src/targets/mac/mod.rs:19:42
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8960450Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8960930Z 19 |             let device_description: id = msg_send![screen, deviceDescription];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8961630Z    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8962590Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8962980Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8963650Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8964360Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8965420Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8966930Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8967500Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8967730Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8968180Z   --> vendor/scap/src/targets/mac/mod.rs:20:41
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8968600Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8976700Z 20 |             let display_id_number: id = msg_send![device_description, objectForKey: NSString::alloc(nil).init_str("NSScreenNumber")];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8978240Z    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8978940Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8979440Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8980170Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8981120Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8982240Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8985160Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8986430Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8987750Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8988440Z   --> vendor/scap/src/targets/mac/mod.rs:21:42
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8990530Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8992010Z 21 |             let display_id_number: u32 = msg_send![display_id_number, unsignedIntValue];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8992860Z    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8993400Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8993970Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8994990Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8996560Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8997530Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.8999340Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9000080Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9000370Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9000910Z   --> vendor/scap/src/targets/mac/mod.rs:24:42
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9001680Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9002100Z 24 |                 let localized_name: id = msg_send![screen, localizedName];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9002580Z    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9002880Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9003150Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9003790Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9005790Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9006700Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9007710Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9008230Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9008440Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9008840Z   --> vendor/scap/src/targets/mac/mod.rs:25:39
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9009110Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9009450Z 25 |                 let name: *const i8 = msg_send![localized_name, UTF8String];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9010120Z    |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9010460Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9010760Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9011390Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9012220Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9013130Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9014240Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9014780Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9014980Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9015390Z   --> vendor/scap/src/targets/mac/mod.rs:91:33
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9015640Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9016120Z 91 |             let ns_window: id = msg_send![ns_app, windowWithWindowNumber: cg_win_id as NSUInteger];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9016680Z    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9017100Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9017350Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9017910Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9019760Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9020540Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9021550Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9022390Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9022620Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9023060Z   --> vendor/scap/src/targets/mac/mod.rs:92:37
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9023380Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9023740Z 92 |             let scale_factor: f64 = msg_send![ns_window, backingScaleFactor];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9024210Z    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9024510Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9024930Z    = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9025870Z    = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9026610Z    = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9027390Z    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9028400Z    = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9028950Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9029170Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9029740Z    --> vendor/scap/src/targets/mac/mod.rs:107:33
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9030030Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9030490Z 107 |             let ns_window: id = msg_send![ns_app, windowWithWindowNumber: cg_win_id as NSUInteger];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9031130Z     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9031480Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9031780Z     = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9032420Z     = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9033100Z     = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9033880Z     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9034900Z     = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9036370Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9036760Z warning: unexpected `cfg` condition value: `cargo-clippy`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9037230Z    --> vendor/scap/src/targets/mac/mod.rs:108:33
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9037500Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9037880Z 108 |             let frame: NSRect = msg_send![ns_window, frame];
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9038390Z     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9038800Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9039490Z     = note: no expected values for `feature`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9040840Z     = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9041650Z     = help: try referring to `sel_impl` crate for guidance on how handle this unexpected cfg
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9042630Z     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9044060Z     = note: this warning originates in the macro `sel_impl` which comes from the expansion of the macro `msg_send` (in Nightly builds, run with -Z macro-backtrace for more info)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:10.9044600Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2120260Z warning: hiding a lifetime that's elided elsewhere is confusing
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2120880Z   --> vendor/scap/src/capturer/engine/mac/pixel_buffer.rs:44:17
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2121250Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2121570Z 44 |     pub fn data(&self) -> PixelBufferData {
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2122520Z    |                 ^^^^^     ^^^^^^^^^^^^^^^ the same lifetime is hidden here
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2122910Z    |                 |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2123270Z    |                 the lifetime is elided here
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2123630Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2124030Z    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2124610Z    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2124980Z help: use `'_` for type paths
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2125210Z    |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2125500Z 44 |     pub fn data(&self) -> PixelBufferData<'_> {
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2125880Z    |                                          ++++
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2126080Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2126300Z warning: hiding a lifetime that's elided elsewhere is confusing
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2126730Z    --> vendor/scap/src/capturer/engine/mac/pixel_buffer.rs:134:17
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2127080Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2127420Z 134 |     pub fn data(&self) -> PixelBufferData {
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2127960Z     |                 ^^^^^     ^^^^^^^^^^^^^^^ the same lifetime is hidden here
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2128330Z     |                 |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2128640Z     |                 the lifetime is elided here
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2128900Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2129350Z     = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2129820Z help: use `'_` for type paths
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2130070Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2130360Z 134 |     pub fn data(&self) -> PixelBufferData<'_> {
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2130830Z     |                                          ++++
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2131020Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2231010Z warning: `scap` (lib) generated 13 warnings (run `cargo clippy --fix --lib -p scap -- -D warnings` to apply 2 suggestions)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.2231830Z     Checking lumen-desktop v0.1.0 (/Users/runner/work/dartmoor/dartmoor)
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9799590Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9800290Z    --> src/app/panels.rs:513:33
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9800670Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9801210Z 513 |                     Stroke::new(1.0, Color32::from_gray(38)),
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9801880Z     |                                 ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9802470Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9803080Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9804080Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9806140Z     = note: `-D float-literal-f32-fallback` implied by `-D warnings`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9806820Z     = help: to override `-D warnings` add `#[allow(float_literal_f32_fallback)]`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9807150Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9807540Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9808100Z    --> src/app/panels.rs:517:33
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9808430Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9809070Z 517 |                     Stroke::new(1.0, Color32::from_gray(38)),
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9809730Z     |                                 ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9810260Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9811390Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9812280Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9812690Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9813020Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9813660Z    --> src/app/panels.rs:554:37
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9813990Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9814480Z 554 |                         Stroke::new(1.0, marker),
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9839010Z     |                                     ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9839540Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9840240Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9841130Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9841530Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9841840Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9842290Z    --> src/app/panels.rs:573:66
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9842570Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9843060Z 573 |                         painter.line_segment([a, b], Stroke::new(2.0, marker));
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9843770Z     |                                                                  ^^^ help: explicitly specify the type as `f32`: `2.0_f32`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9844360Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9844980Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9845900Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9846320Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9846620Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9847110Z    --> src/app/panels.rs:584:77
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9847380Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9847860Z 584 |                     painter.arrow(screen(end) - vector, vector, Stroke::new(2.5, marker));
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9848550Z     |                                                                             ^^^ help: explicitly specify the type as `f32`: `2.5_f32`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9849030Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9849600Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9850820Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9851190Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9851480Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9851910Z    --> src/app/panels.rs:636:29
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9852180Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9852590Z 636 |                 Stroke::new(2.0, if focused { ACCENT } else { Color32::WHITE }),
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9853280Z     |                             ^^^ help: explicitly specify the type as `f32`: `2.0_f32`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9854060Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9854640Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9855410Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9855780Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9931910Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9932430Z    --> src/app.rs:421:58
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9932700Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9933190Z 421 |             style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9933850Z     |                                                          ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9934300Z     |
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9934840Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9935620Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:11.9936050Z
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:12.6148350Z error: could not compile `lumen-desktop` (lib) due to 7 previous errors
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:12.6148900Z warning: build failed, waiting for other jobs to finish...
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:13.0999950Z error: could not compile `lumen-desktop` (lib test) due to 7 previous errors
+native (macos-14)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:13.1267710Z ##[error]Process completed with exit code 101.
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	﻿2026-10-04T22:07:26.9995187Z ##[group]Run cargo clippy --locked --all-targets -- -D warnings
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:26.9995688Z cargo clippy --locked --all-targets -- -D warnings
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:27.0059523Z shell: /usr/bin/bash -e {0}
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:27.0059835Z env:
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:27.0060071Z   CARGO_HOME: /home/runner/.cargo
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:27.0060372Z   CARGO_INCREMENTAL: 0
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:27.0060627Z   CARGO_TERM_COLOR: always
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:27.0060886Z   CACHE_ON_FAILURE: false
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:27.0061146Z ##[endgroup]
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:27.0721635Z     Updating crates.io index
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:28.6496668Z     Checking scap v0.0.8 (/home/runner/work/dartmoor/dartmoor/vendor/scap)
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:28.7528238Z     Checking lumen-desktop v0.1.0 (/home/runner/work/dartmoor/dartmoor)
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1372421Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1373742Z    --> src/app/panels.rs:513:33
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1375081Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1382772Z 513 |                     Stroke::new(1.0, Color32::from_gray(38)),
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1384488Z     |                                 ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1385680Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1387111Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1389534Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1391271Z     = note: `-D float-literal-f32-fallback` implied by `-D warnings`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1392740Z     = help: to override `-D warnings` add `#[allow(float_literal_f32_fallback)]`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1393657Z
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1394619Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1395799Z    --> src/app/panels.rs:517:33
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1397008Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1398119Z 517 |                     Stroke::new(1.0, Color32::from_gray(38)),
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1399906Z     |                                 ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1401094Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1402548Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1404574Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1405614Z
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1406476Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1407732Z    --> src/app/panels.rs:554:37
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1408840Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1409817Z 554 |                         Stroke::new(1.0, marker),
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1411199Z     |                                     ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1412342Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1413774Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1415786Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1416842Z
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1417713Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1419238Z    --> src/app/panels.rs:573:66
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1420539Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1421858Z 573 |                         painter.line_segment([a, b], Stroke::new(2.0, marker));
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1423561Z     |                                                                  ^^^ help: explicitly specify the type as `f32`: `2.0_f32`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1424886Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1426292Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1428544Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1429580Z
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1430443Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1431589Z    --> src/app/panels.rs:584:77
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1432404Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1433702Z 584 |                     painter.arrow(screen(end) - vector, vector, Stroke::new(2.5, marker));
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1435544Z     |                                                                             ^^^ help: explicitly specify the type as `f32`: `2.5_f32`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1436817Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1438218Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1440470Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1456297Z
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1457231Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1458731Z    --> src/app/panels.rs:636:29
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1459658Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1460859Z 636 |                 Stroke::new(2.0, if focused { ACCENT } else { Color32::WHITE }),
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1462779Z     |                             ^^^ help: explicitly specify the type as `f32`: `2.0_f32`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1463991Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1465652Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1467690Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1469058Z
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1534832Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1536270Z    --> src/app.rs:421:58
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1537069Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1538567Z 421 |             style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1540186Z     |                                                          ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1541321Z     |
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1542687Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1544600Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.1545645Z
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.6339357Z error: could not compile `lumen-desktop` (lib) due to 7 previous errors
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:29.6340071Z warning: build failed, waiting for other jobs to finish...
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:30.3358807Z error: could not compile `lumen-desktop` (lib test) due to 7 previous errors
+native (ubuntu-24.04)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:30.3691914Z ##[error]Process completed with exit code 101.
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	﻿2026-10-04T22:07:47.4299317Z ##[group]Run cargo clippy --locked --all-targets -- -D warnings
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:47.4299885Z cargo clippy --locked --all-targets -- -D warnings
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:47.4366845Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:47.4367214Z env:
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:47.4367427Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:47.4367888Z   CARGO_INCREMENTAL: 0
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:47.4368113Z   CARGO_TERM_COLOR: always
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:47.4368356Z   CACHE_ON_FAILURE: false
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:47.4368577Z ##[endgroup]
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:07:48.3224683Z     Updating crates.io index
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:06.8792057Z     Checking scap v0.0.8 (D:\a\dartmoor\dartmoor\vendor\scap)
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.0522614Z     Checking lumen-desktop v0.1.0 (D:\a\dartmoor\dartmoor)
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7304792Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7306276Z    --> src\app\panels.rs:513:33
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7307356Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7316680Z 513 |                     Stroke::new(1.0, Color32::from_gray(38)),
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7317876Z     |                                 ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7318719Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7319932Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7320981Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7321718Z     = note: `-D float-literal-f32-fallback` implied by `-D warnings`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7322374Z     = help: to override `-D warnings` add `#[allow(float_literal_f32_fallback)]`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7322732Z
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7323075Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7323591Z    --> src\app\panels.rs:517:33
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7323900Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7324347Z 517 |                     Stroke::new(1.0, Color32::from_gray(38)),
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7324984Z     |                                 ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7325450Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7326095Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7327032Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7327482Z
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7327823Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7328350Z    --> src\app\panels.rs:554:37
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7328644Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7329026Z 554 |                         Stroke::new(1.0, marker),
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7329645Z     |                                     ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7330122Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7330774Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7331715Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7332151Z
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7332493Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7336683Z    --> src\app\panels.rs:573:66
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7336996Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7337530Z 573 |                         painter.line_segment([a, b], Stroke::new(2.0, marker));
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7338523Z     |                                                                  ^^^ help: explicitly specify the type as `f32`: `2.0_f32`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7339048Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7340143Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7341144Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7341584Z
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7341932Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7342459Z    --> src\app\panels.rs:584:77
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7342755Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7343310Z 584 |                     painter.arrow(screen(end) - vector, vector, Stroke::new(2.5, marker));
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7344128Z     |                                                                             ^^^ help: explicitly specify the type as `f32`: `2.5_f32`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7344641Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7345278Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7346229Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7346655Z
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7346995Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7347504Z    --> src\app\panels.rs:636:29
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7347800Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7348269Z 636 |                 Stroke::new(2.0, if focused { ACCENT } else { Color32::WHITE }),
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7348948Z     |                             ^^^ help: explicitly specify the type as `f32`: `2.0_f32`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7349401Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7350043Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7350977Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7351408Z
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7506735Z error: falling back to `f32` as the trait bound `f32: From<f64>` is not satisfied
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7507692Z    --> src\app.rs:421:58
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7508040Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7508572Z 421 |             style.visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7509333Z     |                                                          ^^^ help: explicitly specify the type as `f32`: `1.0_f32`
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7509843Z     |
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7510503Z     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7511464Z     = note: for more information, see issue #154024 <https://github.com/rust-lang/rust/issues/154024>
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:07.7511911Z
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:08.4687414Z error: could not compile `lumen-desktop` (lib) due to 7 previous errors
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:08.4689324Z warning: build failed, waiting for other jobs to finish...
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:09.4167503Z error: could not compile `lumen-desktop` (lib test) due to 7 previous errors
+native (windows-latest)	Run cargo clippy --locked --all-targets -- -D warnings	2026-10-04T22:08:09.5551363Z ##[error]Process completed with exit code 1.

@@ -9,9 +9,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install and report repository toolchain
+        # Install reads rust-toolchain.toml; no second compiler version to update.
+        # Keep local verification and every native runner on the same compiler.
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+          rustc --version --verbose
+          cargo --version
       - uses: Swatinem/rust-cache@v2
       - name: Linux development libraries
         if: runner.os == 'Linux'
@@ -20,6 +25,12 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo test --manifest-path vendor/scap/Cargo.toml --lib
+      - name: Vendored capture formatting (Linux)
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path vendor/scap/Cargo.toml -- --check
+      - name: Vendored capture strict lint (Linux)
+        if: runner.os == 'Linux'
+        run: cargo clippy --manifest-path vendor/scap/Cargo.toml --all-targets -- -D warnings
       - run: cargo build --locked --release
       - uses: actions/upload-artifact@v4
         with:
