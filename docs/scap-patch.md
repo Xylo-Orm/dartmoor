@@ -8,18 +8,20 @@ ScreenCaptureKit, Windows Graphics Capture, and portal/PipeWire backends.
 
 ## Changes
 
-- Linux/Windows use a one-slot synchronous frame channel. Native callbacks
-  call `try_send`; when occupied the incoming frame is discarded. macOS uses
+- Windows uses a one-slot synchronous frame channel. Linux reserves its one
+  pending slot before processing pixels; excess frames skip allocation and
+  conversion. Native callbacks never wait for queue capacity. macOS uses
   a one-slot overwrite mailbox: new images replace older samples, and Idle
   notifications cannot replace a pending image or invalidation. Native sample
   destruction happens outside its short mutex section. No callback waits for
-  queue capacity or converts pixels; the worker owns conversion. Backlog is bounded.
+  queue capacity. Backlog is bounded.
 - `Capturer::get_next_frame_timeout(Duration)` returns
   `Result<Option<Frame>, std::sync::mpsc::RecvTimeoutError>`. An elapsed timeout
   returns `Ok(None)`; producer disconnection returns `Err(Disconnected)`.
-  Linux/Windows check the queued frame once for a newer arrival, without
+  Windows checks the queued frame once for a newer arrival, without
   indefinitely draining an active producer. macOS takes the mailbox's selected
-  sample without draining a later Idle over it. One deadline applies across
+  sample without draining a later Idle over it. Linux consumes its reserved
+  slot directly. One deadline applies across
   skipped samples. Native macOS errors also end ordinary and timed reads.
   The original blocking API remains available.
 - Engine start/stop is guarded; dropping an engine stops an active capture.
@@ -39,6 +41,24 @@ ScreenCaptureKit, Windows Graphics Capture, and portal/PipeWire backends.
   dropped. Every dequeued buffer is returned, and null buffers are not queued.
   Header timestamps are read only from a sufficiently sized, non-null metadata
   block. Negotiation permits dimensions up to 16384 pixels per axis.
+- Linux bounds both `VideoFramerate` and `VideoMaxFramerate` by the requested
+  FPS, including variable-rate portal streams. A local deadline accumulator
+  skips excessive callbacks before processing, tolerates small timing jitter,
+  and does not produce catch-up bursts after a stall. BGRx is preferred over
+  three-byte RGB to avoid requesting an unnecessary native format conversion.
+- The Linux-only optional `Options::mapped_frame_processor` processes borrowed,
+  validated rows while their PipeWire buffer is dequeued. Dartmoor applies its
+  existing linear-light 4x4 stratified kernel here, accounting for padding and
+  channel order, and queues at most 160x90 RGB pixels. No full-resolution
+  allocation/copy is needed in this path, and the worker avoids a second filter
+  pass. The default backend path still emits packed full-resolution frames.
+  The hook cannot retain borrowed pixels. Every dequeued buffer is returned
+  before the callback exits, including skipped frames.
+- Linux logs negotiated dimensions, pixel format, fixed/max frame rates and
+  whether mapped processing is enabled. Every five seconds of callbacks it
+  reports incoming/delivered FPS and average buffer-processing milliseconds.
+  This time includes application downsampling but excludes compositor GPU
+  readback. The UI's sampling time still measures sampling/smoothing only.
 - Windows' uncropped path also strips native row padding. With no explicit crop,
   it uses each arriving frame's actual dimensions rather than a static window
   rectangle. Explicit crops are checked and clamped to the current frame, and
@@ -76,12 +96,14 @@ On Linux with PipeWire 1.6.8:
 cargo test --manifest-path vendor/scap/Cargo.toml --lib
 ```
 
-Eighteen tests pass: five existing image/layout helper tests plus thirteen
+Twenty-three tests pass: five existing image/layout helper tests plus thirteen
 shared mailbox/frame-state tests compiled on Linux. They cover priority/latest
 delivery, image and invalidation protection against Idle, timeout/disconnection,
 waiter wakeups, safe sample destruction and cached-image eligibility. Image tests
 cover an offset plus row padding, truncated chunks, out-of-map offsets,
-short/negative strides, overflow and empty dimensions. These shared tests do not
+short/negative strides, overflow and empty dimensions. Five additional Linux
+tests cover negotiated FPS bounds, pacing jitter/stalls, lazy slot reservation,
+disconnection and receiver teardown during conversion. These shared tests do not
 compile or run macOS framework calls. Historically,
 `cargo check --locked --offline -p scap --target x86_64-pc-windows-gnu`
 also passes from Linux against locked `windows-capture` 1.5.0. Linux
@@ -102,6 +124,8 @@ Linux options such as explicit target/crop/output resolution remain limited by
 scap's implementation; selection is delegated to the portal. Other native
 construction/start paths can still panic; callers should contain those failures
 at their worker boundary. Backend stop errors are best effort during teardown.
-Linux/Windows one-slot drop-on-full channels bound memory, but an occupied slot
-retains the older frame until consumed. Their next-frame draining mitigates this
-when another image arrives; they do not currently provide explicit Idle liveness.
+Linux/Windows single pending slots retain the queued frame until consumed.
+Windows also checks once for a newer arrival; Linux skips pixel work while full.
+Neither currently provides explicit Idle liveness. Linux uses CPU-mapped
+buffers; compositor GPU readback can still cause window-capture stuttering on
+some systems. DMA-BUF import and GPU reduction are not implemented.

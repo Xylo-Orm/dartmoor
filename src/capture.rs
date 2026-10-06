@@ -169,6 +169,8 @@ pub fn open(selection: &CaptureSelection, fps: u32) -> Result<Box<dyn CaptureSou
         show_highlight: false,
         output_type: scap::frame::FrameType::BGRAFrame,
         output_resolution: scap::capturer::Resolution::_480p,
+        #[cfg(target_os = "linux")]
+        mapped_frame_processor: Some(reduce_mapped),
         ..Default::default()
     })?;
     capturer.start_capture();
@@ -207,12 +209,71 @@ fn normalize(v: scap::frame::Frame) -> Result<Frame> {
     }
 }
 fn reduce(bytes: &[u8], w: i32, h: i32, channels: usize, order: [usize; 3]) -> Result<Frame> {
+    if w <= 0 || h <= 0 || bytes.len() != w as usize * h as usize * channels {
+        bail!("Capture buffer size does not match dimensions");
+    }
+    reduce_rows(bytes, w, h, channels, order, w as usize * channels)
+}
+
+#[cfg(target_os = "linux")]
+fn reduce_mapped(
+    bytes: &[u8],
+    w: i32,
+    h: i32,
+    channels: usize,
+    order: [usize; 3],
+    stride: usize,
+) -> Option<scap::frame::Frame> {
+    let frame = reduce_rows(bytes, w, h, channels, order, stride).ok()?;
+    Some(scap::frame::Frame::RGB(scap::frame::RGBFrame {
+        display_time: 0,
+        width: frame.width as i32,
+        height: frame.height as i32,
+        data: frame.pixels.into_iter().flatten().collect(),
+    }))
+}
+
+fn reduce_rows(
+    bytes: &[u8],
+    w: i32,
+    h: i32,
+    channels: usize,
+    order: [usize; 3],
+    stride: usize,
+) -> Result<Frame> {
     if w <= 0 || h <= 0 {
         bail!("Invalid capture dimensions");
     }
     let (w, h) = (w as usize, h as usize);
-    if w > 32768 || h > 32768 || bytes.len() != w * h * channels {
+    let span = (h - 1)
+        .checked_mul(stride)
+        .and_then(|v| v.checked_add(w.checked_mul(channels)?));
+    if w > 32768
+        || h > 32768
+        || channels == 0
+        || order.iter().any(|c| *c >= channels)
+        || stride < w * channels
+        || span.is_none_or(|span| span > bytes.len())
+    {
         bail!("Capture buffer size does not match dimensions");
+    }
+    // Linux has already applied this exact kernel while the PipeWire buffer
+    // was borrowed. Preserve its small RGB output without filtering twice.
+    if w <= WIDTH && h <= HEIGHT && channels == 3 && order == [0, 1, 2] {
+        let pixels = (0..h)
+            .flat_map(|y| {
+                bytes[y * stride..y * stride + w * 3]
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .copied()
+            })
+            .collect();
+        return Ok(Frame {
+            width: w,
+            height: h,
+            pixels,
+        });
     }
     let scale = (WIDTH as f64 / w as f64)
         .min(HEIGHT as f64 / h as f64)
@@ -234,7 +295,7 @@ fn reduce(bytes: &[u8], w: i32, h: i32, channels: usize, order: [usize; 3]) -> R
                 for sx in 0..4 {
                     let px = ((x * 4 + sx) * w / (ow * 4)).min(w - 1);
                     let py = ((y * 4 + sy) * h / (oh * 4)).min(h - 1);
-                    let base = (py * w + px) * channels;
+                    let base = py * stride + px * channels;
                     for c in 0..3 {
                         sum[c] += linear[bytes[base + order[c]] as usize];
                     }
@@ -253,6 +314,70 @@ fn reduce(bytes: &[u8], w: i32, h: i32, channels: usize, order: [usize; 3]) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mapped_reduction_matches_packed_pixels_for_padding_and_channel_orders() {
+        for (channels, order) in [
+            (3, [0, 1, 2]),
+            (4, [2, 1, 0]),
+            (4, [3, 2, 1]),
+            (4, [0, 1, 2]),
+        ] {
+            let (w, h) = (321, 183);
+            let stride = w * channels + 17;
+            let packed: Vec<u8> = (0..w * h * channels).map(|i| (i % 251) as u8).collect();
+            let mut padded = vec![255; stride * h];
+            for y in 0..h {
+                padded[y * stride..y * stride + w * channels]
+                    .copy_from_slice(&packed[y * w * channels..(y + 1) * w * channels]);
+            }
+            let expected = reduce(&packed, w as i32, h as i32, channels, order).unwrap();
+            let native =
+                reduce_mapped(&padded, w as i32, h as i32, channels, order, stride).unwrap();
+            let scap::frame::Frame::RGB(ref output) = native else {
+                panic!("expected RGB")
+            };
+            assert!(output.data.len() <= WIDTH * HEIGHT * 3);
+            let actual = normalize(native).unwrap();
+            assert_eq!(
+                (actual.width, actual.height),
+                (expected.width, expected.height)
+            );
+            assert_eq!(actual.pixels, expected.pixels);
+        }
+        assert!(reduce_mapped(&[0; 15], 2, 2, 4, [2, 1, 0], 8).is_none());
+        assert!(reduce_mapped(&[0; 16], 2, 2, 4, [2, 1, 0], 7).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "release-mode capture CPU benchmark"]
+    fn benchmark_mapped_capture_reduction() {
+        let (w, h) = (3840, 2160);
+        let pixels: Vec<u8> = (0..w * h * 4).map(|i| (i % 251) as u8).collect();
+        let iterations = 100;
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(
+                reduce(&pixels.clone(), w as i32, h as i32, 4, [2, 1, 0]).unwrap(),
+            );
+        }
+        let old = start.elapsed();
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(
+                normalize(reduce_mapped(&pixels, w as i32, h as i32, 4, [2, 1, 0], w * 4).unwrap())
+                    .unwrap(),
+            );
+        }
+        println!(
+            "4K buffer + reduction: old {:.3} ms/frame; mapped {:.3} ms/frame; transferred {} -> {} bytes (excludes compositor readback)",
+            old.as_secs_f64() * 1000.0 / iterations as f64,
+            start.elapsed().as_secs_f64() * 1000.0 / iterations as f64,
+            pixels.len(),
+            WIDTH * HEIGHT * 3
+        );
+    }
     #[test]
     fn synthetic_pacing_timeout_does_not_claim_backend_idle() {
         let mut source = Synthetic::new(1);

@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 use std::sync::mpsc;
 
 use super::{CapturerBuildError, Options};
@@ -18,6 +18,9 @@ mod win;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(any(target_os = "linux", test))]
+mod linux_mailbox;
+
 #[cfg(target_os = "macos")]
 pub type ChannelItem = (
     screencapturekit::cm_sample_buffer::CMSampleBuffer,
@@ -30,9 +33,13 @@ pub type ChannelItem = Frame;
 pub type FrameSender = mac_mailbox::Sender<ChannelItem>;
 #[cfg(target_os = "macos")]
 pub type FrameReceiver = mac_mailbox::Receiver<ChannelItem>;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub type FrameSender = linux_mailbox::Sender<ChannelItem>;
+#[cfg(target_os = "linux")]
+pub type FrameReceiver = linux_mailbox::Receiver<ChannelItem>;
+#[cfg(target_os = "windows")]
 pub type FrameSender = mpsc::SyncSender<ChannelItem>;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 pub type FrameReceiver = mpsc::Receiver<ChannelItem>;
 
 pub(crate) fn channel() -> (FrameSender, FrameReceiver) {
@@ -40,7 +47,11 @@ pub(crate) fn channel() -> (FrameSender, FrameReceiver) {
     {
         mac_mailbox::channel()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_mailbox::channel()
+    }
+    #[cfg(target_os = "windows")]
     {
         mpsc::sync_channel(1)
     }

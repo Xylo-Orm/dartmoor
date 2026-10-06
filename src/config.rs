@@ -1,6 +1,7 @@
 //! Versioned, credential-free configuration with atomic persistence.
 
 pub use crate::core::CaptureSelection;
+use crate::core::SoftAmbience;
 use crate::core::{Light, Point, Route, Shape, validate_lights};
 use anyhow::{Context, Result, ensure};
 use directories::ProjectDirs;
@@ -25,6 +26,16 @@ pub struct Config {
     pub fps: u32,
     pub smoothing_ms: f32,
     pub brightness: f32,
+    #[serde(default)]
+    pub black_bar_detection: bool,
+    #[serde(default)]
+    pub soft_ambience: SoftAmbience,
+    #[serde(default)]
+    pub dark_zones: crate::dark_zones::DarkZones,
+    #[serde(default)]
+    pub mode: crate::music::SyncMode,
+    #[serde(default)]
+    pub music: crate::music::MusicSettings,
     pub ha_url: String,
     pub ha_interval_ms: u64,
     #[serde(default)]
@@ -42,6 +53,7 @@ impl Default for Config {
                 shape: Shape::Strip {
                     points: vec![Point { x: 0.15, y: 0.8 }, Point { x: 0.85, y: 0.8 }],
                     radius: 0.06,
+                    segment_leds: vec![],
                     reverse: false,
                 },
                 zones: 8,
@@ -50,6 +62,11 @@ impl Default for Config {
             fps: 30,
             smoothing_ms: 120.0,
             brightness: 0.7,
+            black_bar_detection: false,
+            soft_ambience: SoftAmbience::default(),
+            dark_zones: crate::dark_zones::DarkZones::default(),
+            mode: crate::music::SyncMode::default(),
+            music: crate::music::MusicSettings::default(),
             ha_url: "http://homeassistant.local:8123".into(),
             ha_interval_ms: 1000,
             restore_wled_state: false,
@@ -105,6 +122,9 @@ impl Config {
                 && !address.contains('\\'),
             "Home Assistant URL must not contain credentials, query parameters, or fragments"
         );
+        self.soft_ambience.validate()?;
+        self.dark_zones.validate()?;
+        self.music.validate()?;
         validate_lights(&self.lights)
     }
 }
@@ -264,6 +284,166 @@ fn backup_invalid_config(path: &Path, parent: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dark_and_music_settings_default_validate_and_roundtrip() {
+        let mut config = Config::default();
+        let mut old = serde_json::to_value(&config).unwrap();
+        for field in ["dark_zones", "mode", "music"] {
+            old.as_object_mut().unwrap().remove(field);
+        }
+        assert_eq!(decode_layout(&old.to_string()).unwrap(), config);
+        config.dark_zones = crate::dark_zones::DarkZones {
+            enabled: true,
+            threshold: 24,
+        };
+        config.mode = crate::music::SyncMode::Music;
+        config.music.input = crate::music::AudioInput::Demo;
+        config.music.color = [10, 40, 240];
+        config.music.decay_ms = 500.0;
+        let json = encode_layout(&config).unwrap();
+        assert_eq!(decode_layout(&json).unwrap(), config);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        save_to(&config, &path).unwrap();
+        assert_eq!(read_config(&path).unwrap(), config);
+        for bad in [
+            "\"dark_zones\": {\"enabled\": true, \"threshold\": 65}",
+            "\"dark_zones\": {\"unknown\": 1}",
+            "\"dark_zones\": {\"threshold\": 8, \"threshold\": 9}",
+        ] {
+            let mut value = serde_json::to_value(Config::default()).unwrap();
+            value.as_object_mut().unwrap().remove("dark_zones");
+            let document = value.to_string();
+            let document = format!("{},{} }}", &document[..document.len() - 1], bad);
+            assert!(decode_layout(&document).is_err());
+        }
+        for field in 0..4 {
+            for value in [f32::NAN, f32::INFINITY, -1.0, 3000.0] {
+                let mut invalid = config.clone();
+                match field {
+                    0 => invalid.music.sensitivity = value,
+                    1 => invalid.music.attack_ms = value,
+                    2 => invalid.music.decay_ms = value,
+                    _ => invalid.music.brightness = value,
+                }
+                assert!(invalid.validate().is_err());
+            }
+        }
+        let mut invalid = serde_json::to_value(&config).unwrap();
+        invalid["music"]["unknown"] = serde_json::json!(true);
+        assert!(decode_layout(&invalid.to_string()).is_err());
+    }
+    #[test]
+    fn advanced_music_defaults_and_controls_are_strict_and_persistent() {
+        use crate::music::{DetectorMode, MusicSettings};
+        let old = r#"{"input":"playback","device":"","sensitivity":0.8,"attack_ms":20,"decay_ms":240,"brightness":0.7,"color":[100,170,255]}"#;
+        let decoded: MusicSettings = serde_json::from_str(old).unwrap();
+        assert_eq!(decoded.detector, DetectorMode::Advanced);
+        assert_eq!(decoded.sensitivity, 0.8);
+        assert_eq!(decoded.subbass_weight, 0.2);
+        assert_eq!(decoded.sparkle_amount, 0.35);
+        assert!(decoded.follow_beat);
+        for json in [
+            r#"{"detector":"unknown"}"#,
+            r#"{"follow_beat":false,"follow_beat":true}"#,
+        ] {
+            assert!(serde_json::from_str::<MusicSettings>(json).is_err());
+        }
+        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert!(
+                MusicSettings {
+                    subbass_weight: value,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+            assert!(
+                MusicSettings {
+                    sparkle_amount: value,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        let mut config = Config::default();
+        config.music.detector = DetectorMode::Classic;
+        config.music.subbass_weight = 0.7;
+        config.music.sparkle_amount = 0.9;
+        config.music.follow_beat = false;
+        assert_eq!(
+            decode_layout(&encode_layout(&config).unwrap()).unwrap(),
+            config
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("advanced.json");
+        save_to(&config, &path).unwrap();
+        assert_eq!(read_config(&path).unwrap(), config);
+    }
+    #[test]
+    fn soft_ambience_defaults_strict_validation_and_persistence() {
+        let mut config = Config::default();
+        let mut old = serde_json::to_value(&config).unwrap();
+        old.as_object_mut().unwrap().remove("soft_ambience");
+        assert_eq!(
+            decode_layout(&old.to_string()).unwrap().soft_ambience,
+            SoftAmbience::default()
+        );
+        config.soft_ambience = SoftAmbience {
+            enabled: true,
+            strength: 0.75,
+            color_emphasis: 0.7,
+            vibrancy: 0.4,
+        };
+        assert_eq!(
+            decode_layout(&encode_layout(&config).unwrap()).unwrap(),
+            config
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        save_to(&config, &path).unwrap();
+        assert_eq!(read_config(&path).unwrap(), config);
+        for value in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+            for field in 0..3 {
+                let mut invalid = config.clone();
+                match field {
+                    0 => invalid.soft_ambience.strength = value,
+                    1 => invalid.soft_ambience.color_emphasis = value,
+                    _ => invalid.soft_ambience.vibrancy = value,
+                }
+                assert!(invalid.validate().is_err());
+            }
+        }
+        let json = encode_layout(&config)
+            .unwrap()
+            .replace("\"enabled\": true", "\"unknown\": true");
+        assert!(decode_layout(&json).is_err());
+    }
+
+    #[test]
+    fn segment_counts_survive_save_export_and_import() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let mut config = Config::default();
+        config.lights[0].shape = Shape::Strip {
+            points: crate::editor::strip_preset_points(crate::editor::StripPreset::Perimeter, 0.04),
+            radius: 0.04,
+            reverse: true,
+            segment_leds: vec![24, 40, 25, 38],
+        };
+        config.lights[0].route = Route::Wled {
+            host: "desk.local".into(),
+            start: 10,
+            count: 127,
+            device_id: "aabbccddeeff".into(),
+        };
+        save_to(&config, &path).unwrap();
+        assert_eq!(load_from(&path), (config.clone(), None));
+        let exported = encode_layout(&config).unwrap();
+        assert!(exported.contains("segment_leds"));
+        assert_eq!(decode_layout(&exported).unwrap(), config);
+    }
     use super::*;
 
     #[test]
@@ -274,6 +454,7 @@ mod tests {
             id: Some("Anzeige-東京".into()),
         };
         config.restore_wled_state = true;
+        config.black_bar_detection = true;
         let json = encode_layout(&config).unwrap();
         assert!(json.contains("Schreibtisch 🌈 東京"));
         assert!(json.contains("\n  \"version\""));
@@ -300,6 +481,17 @@ mod tests {
         config.brightness = 0.7;
         config.ha_url = "https://user:secret@example.com".into();
         assert!(encode_layout(&config).is_err());
+    }
+
+    #[test]
+    fn layouts_without_black_bar_setting_default_to_disabled() {
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json.as_object_mut().unwrap().remove("black_bar_detection");
+        assert!(
+            !decode_layout(&json.to_string())
+                .unwrap()
+                .black_bar_detection
+        );
     }
 
     #[test]
@@ -564,6 +756,7 @@ mod tests {
         config.lights[0].shape = Shape::Strip {
             points: vec![Point { x: 0.0, y: 0.5 }, Point { x: 1.0, y: 0.5 }],
             radius: 0.2,
+            segment_leds: vec![],
             reverse: false,
         };
         save_to(&config, &path).unwrap();

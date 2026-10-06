@@ -1,7 +1,10 @@
 pub mod app;
+mod black_bars;
 pub mod capture;
 pub mod config;
 pub mod core;
+pub mod dark_zones;
 pub mod editor;
 pub mod engine;
+pub mod music;
 pub mod outputs;

@@ -8,9 +8,10 @@ impl App {
         running: bool,
         snapshot: &crate::engine::Snapshot,
     ) {
-        section_heading(ui, "01", "Desktop source");
-        let synthetic = matches!(self.config.source, CaptureSelection::Synthetic);
-        ui.add_enabled_ui(!running, |ui| {
+        if self.workspace == crate::music::SyncMode::Video {
+            section_heading(ui, "01", "Desktop source");
+            let synthetic = matches!(self.config.source, CaptureSelection::Synthetic);
+            ui.add_enabled_ui(!running, |ui| {
             ui.horizontal(|ui| {
                 if ui.selectable_label(!synthetic, "Screen / window").clicked() {
                     select_desktop(&mut self.config.source);
@@ -35,31 +36,81 @@ impl App {
                 ui.label(egui::RichText::new("Generated colors for trying the editor. No desktop is captured.").small().color(AMBER));
             }
         });
-        if running {
-            ui.small("Stop to choose a different source.");
-        }
-        ui.add_space(18.0);
-        section_heading(ui, "02", "Synchronization");
-        ui.add(
-            egui::Slider::new(&mut self.config.brightness, 0.0..=1.0)
-                .text("Brightness")
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-        );
-        ui.add(
-            egui::Slider::new(&mut self.config.smoothing_ms, 0.0..=5000.0)
-                .text("Smoothing")
-                .suffix(" ms"),
-        );
-        ui.label(
-            egui::RichText::new("More smoothing makes color changes gentler.")
-                .small()
-                .color(MUTED),
-        );
-        ui.collapsing("Capture and control options", |ui| {
+            if running {
+                ui.small("Stop to choose a different source.");
+            }
+            ui.add_space(18.0);
+            section_heading(ui, "02", "Synchronization");
+            ui.add(
+                egui::Slider::new(&mut self.config.brightness, 0.0..=1.0)
+                    .text("Brightness")
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.config.smoothing_ms, 0.0..=5000.0)
+                    .text("Smoothing")
+                    .suffix(" ms"),
+            );
+            ui.label(
+                egui::RichText::new("More smoothing makes color changes gentler.")
+                    .small()
+                    .color(MUTED),
+            );
+            ui.checkbox(&mut self.config.soft_ambience.enabled, "Soft ambience")
+            .on_hover_text("Favor substantial colorful areas within each light’s region. Applies while synchronizing.");
+            if self.config.soft_ambience.enabled {
+                for (value, label, tooltip) in [
+                    (
+                        &mut self.config.soft_ambience.strength,
+                        "Ambience strength",
+                        "Blend accurate sampling with soft ambience. Zero keeps accurate colors.",
+                    ),
+                    (
+                        &mut self.config.soft_ambience.color_emphasis,
+                        "Color emphasis",
+                        "Give colorful areas more influence than whites, grays and dark noise.",
+                    ),
+                    (
+                        &mut self.config.soft_ambience.vibrancy,
+                        "Vibrancy",
+                        "Add saturation while preserving luminance and fitting the output gamut.",
+                    ),
+                ] {
+                    ui.add(
+                        egui::Slider::new(value, 0.0..=1.0)
+                            .text(label)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    )
+                    .on_hover_text(tooltip);
+                }
+            }
+            ui.checkbox(&mut self.config.dark_zones.enabled, "Turn off dark zones")
+            .on_hover_text("Turn LEDs off when their own region is dark, after black-bar cropping. Applies while synchronizing.");
+            if self.config.dark_zones.enabled {
+                ui.add(egui::Slider::new(&mut self.config.dark_zones.threshold, 0..=64).text("Black sensitivity"))
+                .on_hover_text("Higher sensitivity turns lights off in brighter shadows. 0 requires exact black; 8 is a conservative starting point.");
+                ui.small("Higher sensitivity counts brighter shadows as black.");
+                if snapshot.mode == Some(crate::music::SyncMode::Video) {
+                    ui.small(format!(
+                        "Dark zones: {}/{}",
+                        snapshot.dark_zones,
+                        snapshot.colors.iter().map(Vec::len).sum::<usize>()
+                    ));
+                }
+            }
+            ui.checkbox(&mut self.config.black_bar_detection, "Black bar detection")
+                .on_hover_text("Ignore stable top/bottom or left/right black bars. The preview and lights follow the active image. Can be changed while synchronizing.");
+            ui.collapsing("Capture and control options", |ui| {
             ui.add_enabled(!running, egui::Slider::new(&mut self.config.fps, 1..=120).text("Capture fps"));
             ui.add_enabled(!running, egui::Checkbox::new(&mut self.config.restore_wled_state, "Try restoring WLED state on stop"));
             ui.small("Restoration is best effort. Manual changes and automations may compete with synchronization.");
         });
+        } else {
+            self.music_controls(
+                ui,
+                running && snapshot.mode == Some(crate::music::SyncMode::Music),
+            );
+        }
         ui.add_space(18.0);
         section_heading(
             ui,
@@ -177,154 +228,270 @@ impl App {
             })
             .desired_width(f32::INFINITY),
         );
-        ui.add_space(12.0);
-        ui.label(egui::RichText::new("Placement").strong());
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(matches!(light.shape, Shape::Bulb { .. }), "Bulb")
-                .clicked()
-                && !matches!(light.shape, Shape::Bulb { .. })
-            {
-                let center = crate::editor::zone_positions(&light.shape, 1)[0];
-                light.shape = Shape::Bulb {
-                    center,
-                    radius: 0.08,
-                };
-                self.selected_point = 0;
-            }
-            if ui
-                .selectable_label(matches!(light.shape, Shape::Strip { .. }), "Strip path")
-                .clicked()
-                && !matches!(light.shape, Shape::Strip { .. })
-            {
-                let center = crate::editor::zone_positions(&light.shape, 1)[0];
-                light.shape = Shape::Strip {
-                    points: vec![
-                        Point {
-                            x: (center.x - 0.2).max(0.0),
-                            y: center.y,
-                        },
-                        Point {
-                            x: (center.x + 0.2).min(1.0),
-                            y: center.y,
-                        },
-                    ],
-                    radius: 0.05,
-                    reverse: false,
-                };
-                self.selected_point = 0;
-            }
-        });
-        match &mut light.shape {
-            Shape::Bulb { center, radius } => {
-                ui.add(
-                    egui::Slider::new(radius, 0.005..=1.0)
-                        .clamping(egui::SliderClamping::Edits)
-                        .text("Sample radius"),
-                );
-                position_controls(ui, center);
-                ui.small("Drag the marker. Arrow keys move it precisely.");
-            }
-            Shape::Strip {
-                points,
-                radius,
-                reverse,
-            } => {
-                ui.menu_button("Place along desktop…", |ui| {
-                    ui.small("Replace the path; Undo restores your placement.");
-                    for (label, preset) in [
-                        ("Top edge", crate::editor::StripPreset::Top),
-                        ("Bottom edge", crate::editor::StripPreset::Bottom),
-                        ("Left edge", crate::editor::StripPreset::Left),
-                        ("Right edge", crate::editor::StripPreset::Right),
-                        ("Three sides", crate::editor::StripPreset::ThreeSides),
-                        ("Full perimeter", crate::editor::StripPreset::Perimeter),
-                    ] {
-                        if ui.button(label).clicked() {
-                            *points = crate::editor::strip_preset_points(
+        if self.workspace == crate::music::SyncMode::Video {
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new("Placement").strong());
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(matches!(light.shape, Shape::Bulb { .. }), "Bulb")
+                    .clicked()
+                    && !matches!(light.shape, Shape::Bulb { .. })
+                {
+                    let center = crate::editor::zone_positions(&light.shape, 1)[0];
+                    light.shape = Shape::Bulb {
+                        center,
+                        radius: 0.08,
+                    };
+                    self.selected_point = 0;
+                }
+                if ui
+                    .selectable_label(matches!(light.shape, Shape::Strip { .. }), "Strip path")
+                    .clicked()
+                    && !matches!(light.shape, Shape::Strip { .. })
+                {
+                    let center = crate::editor::zone_positions(&light.shape, 1)[0];
+                    light.shape = Shape::Strip {
+                        points: vec![
+                            Point {
+                                x: (center.x - 0.2).max(0.0),
+                                y: center.y,
+                            },
+                            Point {
+                                x: (center.x + 0.2).min(1.0),
+                                y: center.y,
+                            },
+                        ],
+                        radius: 0.05,
+                        segment_leds: vec![],
+                        reverse: false,
+                    };
+                    self.selected_point = 0;
+                }
+            });
+            match &mut light.shape {
+                Shape::Bulb { center, radius } => {
+                    ui.add(
+                        egui::Slider::new(radius, 0.005..=1.0)
+                            .clamping(egui::SliderClamping::Edits)
+                            .text("Sample radius"),
+                    );
+                    position_controls(ui, center);
+                    ui.small("Drag the marker. Arrow keys move it precisely.");
+                }
+                Shape::Strip {
+                    points,
+                    radius,
+                    segment_leds,
+                    reverse,
+                } => {
+                    ui.menu_button("Place along desktop…", |ui| {
+                        ui.small("Replace the path; Undo restores your placement.");
+                        for (label, preset) in [
+                            ("Top edge", crate::editor::StripPreset::Top),
+                            ("Bottom edge", crate::editor::StripPreset::Bottom),
+                            ("Left edge", crate::editor::StripPreset::Left),
+                            ("Right edge", crate::editor::StripPreset::Right),
+                            ("Three sides", crate::editor::StripPreset::ThreeSides),
+                            ("Full perimeter", crate::editor::StripPreset::Perimeter),
+                        ] {
+                            let replacement = crate::editor::strip_preset_points(
                                 preset,
                                 crate::editor::DEFAULT_STRIP_INSET,
                             );
-                            self.selected_point = 0;
-                            ui.close();
-                        }
-                    }
-                });
-                ui.add(
-                    egui::Slider::new(radius, 0.005..=1.0)
-                        .clamping(egui::SliderClamping::Edits)
-                        .text("Sample extent"),
-                );
-                ui.checkbox(reverse, "Reverse color order");
-                self.selected_point = self.selected_point.min(points.len() - 1);
-                egui::ComboBox::from_id_salt("path-point")
-                    .selected_text(format!(
-                        "Point {} of {}",
-                        self.selected_point + 1,
-                        points.len()
-                    ))
-                    .show_ui(ui, |ui| {
-                        for i in 0..points.len() {
-                            ui.selectable_value(
-                                &mut self.selected_point,
-                                i,
-                                format!("Point {}", i + 1),
-                            );
+                            let total: usize = segment_leds.iter().sum();
+                            let allowed = segment_leds.is_empty() || total >= replacement.len() - 1;
+                            if ui.add_enabled(allowed, egui::Button::new(label)).clicked() {
+                                if !segment_leds.is_empty() {
+                                    *segment_leds = crate::editor::evenly_distributed_leds(
+                                        total,
+                                        replacement.len() - 1,
+                                    );
+                                    if light.zones > 1 {
+                                        light.zones = light.zones.max(segment_leds.len());
+                                    }
+                                }
+                                *points = replacement;
+                                self.selected_point = 0;
+                                ui.close();
+                            }
                         }
                     });
-                position_controls(ui, &mut points[self.selected_point]);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(points.len() < 128, egui::Button::new("Insert point"))
-                        .clicked()
-                    {
-                        let segment = self.selected_point.min(points.len() - 2);
-                        let point = Point {
-                            x: (points[segment].x + points[segment + 1].x) * 0.5,
-                            y: (points[segment].y + points[segment + 1].y) * 0.5,
-                        };
-                        if crate::editor::insert_path_point_at(points, segment, point) {
-                            self.selected_point = segment + 1;
+                    ui.add(
+                        egui::Slider::new(radius, 0.005..=1.0)
+                            .clamping(egui::SliderClamping::Edits)
+                            .text("Sample extent"),
+                    );
+                    ui.checkbox(reverse, "Reverse color order");
+                    self.selected_point = self.selected_point.min(points.len() - 1);
+                    egui::ComboBox::from_id_salt("path-point")
+                        .selected_text(format!(
+                            "Point {} of {}",
+                            self.selected_point + 1,
+                            points.len()
+                        ))
+                        .show_ui(ui, |ui| {
+                            for i in 0..points.len() {
+                                ui.selectable_value(
+                                    &mut self.selected_point,
+                                    i,
+                                    format!("Point {}", i + 1),
+                                );
+                            }
+                        });
+                    position_controls(ui, &mut points[self.selected_point]);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                points.len() < 128
+                                    && (segment_leds.is_empty()
+                                        || segment_leds[self.selected_point.min(points.len() - 2)]
+                                            >= 2),
+                                egui::Button::new("Insert point"),
+                            )
+                            .clicked()
+                        {
+                            let segment = self.selected_point.min(points.len() - 2);
+                            let point = Point {
+                                x: (points[segment].x + points[segment + 1].x) * 0.5,
+                                y: (points[segment].y + points[segment + 1].y) * 0.5,
+                            };
+                            if crate::editor::insert_strip_point(
+                                points,
+                                segment_leds,
+                                segment,
+                                point,
+                            ) {
+                                self.selected_point = segment + 1;
+                                if light.zones > 1 {
+                                    light.zones = light.zones.max(segment_leds.len());
+                                }
+                            }
+                        }
+                        if ui
+                            .add_enabled(points.len() > 2, egui::Button::new("Remove point"))
+                            .clicked()
+                        {
+                            crate::editor::remove_strip_point(
+                                points,
+                                segment_leds,
+                                self.selected_point,
+                            );
+                            self.selected_point = self.selected_point.min(points.len() - 1);
+                        }
+                    });
+                    ui.small("Drag a numbered point. Double-click the selected path to insert a point. The arrow shows first → last color.");
+                    if !matches!(light.route, Route::HomeAssistant { .. }) {
+                        ui.add_space(10.0);
+                        let mut custom = !segment_leds.is_empty();
+                        ui.add_enabled_ui(!running && !self.busy, |ui| {
+                            let total = match light.route {
+                                Route::Wled { count, .. } => count,
+                                _ => 60usize.max(points.len() - 1),
+                            };
+                            let enough_leds = custom || total >= points.len() - 1;
+                            if ui
+                                .add_enabled(
+                                    enough_leds,
+                                    egui::Checkbox::new(&mut custom, "Set LEDs per segment"),
+                                )
+                                .changed()
+                            {
+                                if custom {
+                                    *segment_leds = crate::editor::evenly_distributed_leds(
+                                        total,
+                                        points.len() - 1,
+                                    );
+                                    if light.zones > 1 {
+                                        light.zones = light.zones.max(segment_leds.len());
+                                    }
+                                } else {
+                                    segment_leds.clear();
+                                }
+                            }
+                            if !enough_leds {
+                                ui.small(
+                                "Map at least one LED per path segment to enable segment counts.",
+                            );
+                            }
+                            if custom {
+                                for (i, (pair, count)) in
+                                    points.windows(2).zip(segment_leds.iter_mut()).enumerate()
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.label(segment_label(pair[0], pair[1], i));
+                                        ui.add(
+                                            egui::DragValue::new(count)
+                                                .range(1..=4096)
+                                                .suffix(" LEDs"),
+                                        );
+                                    });
+                                }
+                            }
+                        });
+                        if custom {
+                            let total: usize = segment_leds.iter().sum();
+                            if let Route::Wled { count, .. } = &mut light.route {
+                                *count = total;
+                            }
+                            ui.label(format!("Total: {total} LEDs"));
+                            ui.small("Counts follow the numbered path. Reverse starts at the last segment. Presets redistribute the total evenly; re-enter your side counts afterward.");
+                            if running {
+                                ui.small("Stop to change LED counts.");
+                            }
                         }
                     }
+                }
+            }
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new("Color output").strong());
+            let maximum_zones = match &light.shape {
+                Shape::Strip { segment_leds, .. } if !segment_leds.is_empty() => {
+                    segment_leds.iter().sum::<usize>().min(256)
+                }
+                _ => 256,
+            };
+            light.zones = light.zones.min(maximum_zones);
+            if matches!(light.route, Route::HomeAssistant { .. }) {
+                light.zones = 1;
+                ui.label("Single color · ambient updates");
+            } else {
+                ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(points.len() > 2, egui::Button::new("Remove point"))
+                        .selectable_label(light.zones == 1, "Single color")
                         .clicked()
                     {
-                        crate::editor::remove_path_point(points, self.selected_point);
-                        self.selected_point = self.selected_point.min(points.len() - 1);
+                        light.zones = 1;
+                    }
+                    if ui
+                        .add_enabled_ui(maximum_zones > 1, |ui| {
+                            ui.selectable_label(light.zones > 1, "Addressable")
+                        })
+                        .inner
+                        .clicked()
+                        && light.zones == 1
+                    {
+                        light.zones = 16.min(maximum_zones);
                     }
                 });
-                ui.small("Drag a numbered point. Double-click the selected path to insert a point. The arrow shows first → last color.");
+                if light.zones > 1 {
+                    let minimum = match &light.shape {
+                        Shape::Strip { segment_leds, .. } => segment_leds.len().max(2),
+                        _ => 2,
+                    };
+                    light.zones = light.zones.max(minimum);
+                    ui.add(
+                        egui::Slider::new(&mut light.zones, minimum..=maximum_zones)
+                            .text("Color zones"),
+                    );
+                }
+                ui.small("Choose addressable only for hardware that accepts separate LED colors.");
             }
-        }
-        ui.add_space(12.0);
-        ui.label(egui::RichText::new("Color output").strong());
-        if matches!(light.route, Route::HomeAssistant { .. }) {
-            light.zones = 1;
-            ui.label("Single color · ambient updates");
+            ui.add_space(12.0);
         } else {
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(light.zones == 1, "Single color")
-                    .clicked()
-                {
-                    light.zones = 1;
-                }
-                if ui
-                    .selectable_label(light.zones > 1, "Addressable")
-                    .clicked()
-                    && light.zones == 1
-                {
-                    light.zones = 16;
-                }
-            });
-            if light.zones > 1 {
-                ui.add(egui::Slider::new(&mut light.zones, 2..=256).text("Color zones"));
-            }
-            ui.small("Choose addressable only for hardware that accepts separate LED colors.");
+            ui.add_space(12.0);
+            ui.label("Main pulses fill this light; Advanced adds zone sparkles.");
+            ui.small("Video placement, color zones and LED segment counts are shared and retained. Edit them in Video.");
         }
-        ui.add_space(12.0);
         ui.collapsing("Device route and mapping", |ui| {
             ui.add_enabled_ui(!running && !self.busy, |ui| {
                 let mut route = match light.route {
@@ -345,7 +512,10 @@ impl App {
                         0 => Route::Wled {
                             host: String::new(),
                             start: 0,
-                            count: 1,
+                            count: match &light.shape {
+                                Shape::Strip { segment_leds, .. } if !segment_leds.is_empty() => segment_leds.iter().sum(),
+                                _ => 1,
+                            },
                             device_id: String::new(),
                         },
                         1 => Route::HomeAssistant {
@@ -409,7 +579,8 @@ impl App {
                         });
                         ui.horizontal(|ui| {
                             ui.label("LED count");
-                            ui.add(egui::DragValue::new(count).range(1..=4096));
+                            let derived = matches!(&light.shape, Shape::Strip { segment_leds, .. } if !segment_leds.is_empty());
+                            ui.add_enabled(!derived, egui::DragValue::new(count).range(1..=4096));
                         });
                     }
                     Route::HomeAssistant { entity_id } => {
@@ -559,6 +730,7 @@ impl App {
                     points,
                     radius,
                     reverse,
+                    ..
                 } => {
                     for pair in points.windows(2) {
                         let a = screen(pair[0]);
@@ -674,7 +846,11 @@ impl App {
         if response.double_clicked()
             && let (Some(index), Some(pos)) = (self.selected, response.interact_pointer_pos())
             && let Some(light) = self.config.lights.get_mut(index)
-            && let Shape::Strip { points, .. } = &mut light.shape
+            && let Shape::Strip {
+                points,
+                segment_leds,
+                ..
+            } = &mut light.shape
         {
             let pixel_points: Vec<Point> = points
                 .iter()
@@ -691,8 +867,11 @@ impl App {
                     x: (projected.x - rect.left()) / rect.width(),
                     y: (projected.y - rect.top()) / rect.height(),
                 };
-                if crate::editor::insert_path_point_at(points, segment, position) {
+                if crate::editor::insert_strip_point(points, segment_leds, segment, position) {
                     self.selected_point = segment + 1;
+                    if light.zones > 1 {
+                        light.zones = light.zones.max(segment_leds.len());
+                    }
                 }
             }
         }
@@ -744,4 +923,19 @@ impl App {
             );
         });
     }
+}
+
+fn segment_label(a: Point, b: Point, index: usize) -> String {
+    let side = if (a.y - b.y).abs() < 0.0001 && a.y <= 0.1 {
+        "Top"
+    } else if (a.y - b.y).abs() < 0.0001 && a.y >= 0.9 {
+        "Bottom"
+    } else if (a.x - b.x).abs() < 0.0001 && a.x <= 0.1 {
+        "Left"
+    } else if (a.x - b.x).abs() < 0.0001 && a.x >= 0.9 {
+        "Right"
+    } else {
+        "Segment"
+    };
+    format!("{side} · {} → {}", index + 1, index + 2)
 }
