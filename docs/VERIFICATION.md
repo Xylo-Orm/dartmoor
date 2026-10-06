@@ -126,3 +126,280 @@ Corrective integration checks pass:107 application tests/all targets, formatting
 ### Corrective pass2
 
 Re-review found an introduced HA scheduling race that ordinary107-test coverage missed: offloaded JSON parsing yielded after consuming a message, so a cadence tick could discard an availability update. QA’s deterministic held-blocking-worker probe reproduced the actual read cancellation boundary; architecture independently confirmed it. The steady loop now selects raw message receipt first, then finishes committed decoding without timer cancellation. Stop still ends the entire connection promptly. Queued parser jobs abort when their await owner is canceled; already-running bounded parses cannot be interrupted by Tokio. The final109-test application suite passes (all targets), along with formatting, strict all-target Clippy, Linux release bins/examples and whitespace checks. Two new deterministic regressions use the actual HA stream: they acknowledge a baseline color, hold a large unavailable or unsupported on/off-capability event behind one blocking worker, change the target color and advance cadence, then verify no stale service; Stop completes before releasing the held worker. A scoped notification is compiled only in unit tests. A separate queued-parser test proves canceled jobs do not execute and release their owned buffers. The negative control restoring the old timer/read selection fails with the expected stale-state call and exits101, rather than hanging; exact mutation/log/command are preserved at `evidence/ha-cadence-negative-control.*` and `evidence/ha-cadence-negative-control-command.txt`. Final passing logs are `evidence/tests-local-fixes-revision2.log`, `evidence/clippy-local-fixes-revision2.log` and `evidence/build-local-fixes-revision2.log`. The unchanged vendor tree has18 passing helper tests and both vendor format/lint checks in this batch. No native window/capture/device/keyring/Windows/macOS test or new performance claim is included. Final independent architecture8.6/10 and QA8.7/10 accept the batch; overall8.6/10, with two of three corrective attempts used. Reports and exact provenance are in [the review log](REVIEW.md). No unresolved critical/high/medium implementation blocker remains; native/hardware confidence limits above remain explicit. No commit or push was performed.
+## Window capture performance adjustment
+
+The Linux backend now requests bounded fixed and variable capture rates,
+reserves queue capacity before processing pixels, and reduces borrowed mapped
+rows directly to at most 160x90 RGB. The reduction regression compares packed
+and padded buffers across all negotiated channel orders and verifies identical
+output through worker normalization. Vendor tests cover FPS bounds, jitter and
+stall handling, lazy slot reservation and disconnect/teardown behavior.
+
+Validation: 118 application tests pass (all targets), with one intentionally
+ignored release benchmark; 23 vendored scap tests pass. Strict all-target
+Clippy, vendor Clippy, formatting, whitespace validation and release build pass.
+The release benchmark over 100 3840x2160 frames measured 2.796 ms/frame for a
+full-buffer copy plus reduction versus 0.798 ms/frame for mapped reduction and
+worker normalization. Transferred pixels fall from 33,177,600 to 43,200 bytes
+per frame. These measurements exclude compositor capture/GPU readback and are
+not an end-to-end application latency claim. Reproduce with:
+
+```sh
+cargo test --release --lib benchmark_mapped_capture_reduction -- --ignored --nocapture
+```
+
+A live Fedora/GNOME/Wayland portal probe captured a user-selected window at
+5120x2880 BGRx, negotiated variable FPS (0/1) with maximum 30/1, and produced
+367 frames in about 15 seconds. Incoming/delivered rate was approximately
+24 FPS; buffer processing averaged 0.83–0.94 ms/frame. The user confirmed that
+window capture stuttering improved. This confirms the selected-window path and
+an observed improvement, without proving that all compositor/driver stuttering
+is eliminated. The probe now starts its duration at the first frame and allows
+up to 120 seconds for portal selection. Output used mock lights throughout.
+
+## Black bar detection
+
+The saved Synchronization checkbox enables conservative detection of opposing
+letterbox/pillarbox bars on reduced capture frames. Preview and sampling share
+the resulting active picture. Stable crops require at least three observations
+over 350 ms; dark scenes retain the established crop, resizing resets it, and
+disabling restores the full image on the next processed frame.
+
+Seven new regressions cover horizontal/vertical/combined bars, transient bars,
+full-picture restoration, dark scenes, disabling/re-enabling, asymmetric/deep
+edge rejection, resizing, old-layout defaults, enabled-setting persistence,
+the actual UI checkbox, and live worker sampling/preview changes. The worker
+test samples a light placed within the original top bar: enabled detection
+produces the content's red color and a cropped preview; disabling produces
+black and the full preview; re-enabling returns to red after confirmation.
+All 125 application tests pass, with one intentionally ignored release capture
+benchmark. Formatting, strict all-target Clippy, whitespace validation and
+Linux release build pass. These feature checks use constructed frames and
+headless UI; no additional native capture/device session was needed or tested.
+
+
+## Soft ambience — 2026-10-05
+
+Implemented on top of the existing uncommitted per-segment LED allocation,
+Linux mapped-buffer downsampling and black-bar detection work, preserving those
+changes. The new saved controls use strict defaulted decoding, live Apply and
+existing configuration history. No capture or vendor implementation was changed
+for this feature, and no commit or push was made.
+
+Verification on this Linux host used Fedora Rust 1.98.1 and matching staged
+rustfmt/Clippy binaries at `/tmp/dartmoor-rust-tools/usr/bin` (the repository pins
+1.99.0; that rustup toolchain was unavailable here). Final results:
+
+- `cargo test --locked`: **133 passed**, one intentionally ignored capture
+  benchmark; main and doc-test targets passed. The initial sandbox run passed
+  non-network tests but denied 17 localhost socket tests. The complete final run
+  passed with sandbox escalation for mock-device sockets.
+- `cargo test --offline --manifest-path vendor/scap/Cargo.toml --lib`:
+  **23 passed**. An initial standalone attempt with `--locked` failed: first
+  registry access was blocked, then the authorized retry reported no standalone
+  vendor lockfile. The offline command generated its ignored local lockfile and
+  passed using cached dependencies; the application lockfile is unchanged.
+- `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets -- -D warnings`,
+  `git diff --check`, and `cargo build --locked --release --bins --examples`: passed.
+- Eight added tests cover exact disabled/zero-strength bypass, uniform neutrals
+  and colors, substantial color emphasis, tiny outliers, continuous competing
+  hues, a direct pixel-weight oracle, linear strength blending, luminance/gamut
+  constraints, spatial zones/reversal/bulb broadcast, defaults/validation/disk
+  persistence/layout interchange, headless checkbox/sliders/history, and live
+  cropped-picture updates without reopening capture. Existing mapping, smoothing,
+  routing, black-bar and backend regression tests remain included.
+
+Release sampling probe: `target/release/examples/sampling_stress` with modes
+`typical`, `broad`, `narrow`, `bulbs`. Each uses a deterministic mixed-color
+160×90 SDR frame, five warmups and 1,000 measured iterations per path; enhanced
+uses enabled mode with default strength/emphasis/vibrancy. The accurate measurement
+uses the same public entry point with the mode disabled. Times include sampling
+allocations and color production. A final sequential run after builds finished:
+
+| Workload | Accurate ms/frame | Enhanced ms/frame | Added ms/frame | Ratio |
+|---|---:|---:|---:|---:|
+| One three-sided strip, 60 zones, radius 0.04 | 0.014 | 0.053 | 0.039 | 3.8× |
+| Eight broad strips, 2,048 zones, radius 1.0 | 0.366 | 1.024 | 0.658 | 2.8× |
+| Eight crossing narrow strips, 2,048 zones, radius 0.035 | 0.057 | 0.428 | 0.371 | 7.5× |
+| Eight broad bulbs broadcasting 2,048 zones | 0.014 | 0.269 | 0.255 | 19.2× |
+
+These are local sampling measurements, not end-to-end synchronization performance.
+Rounded ratios are particularly sensitive to small baselines. Earlier repeat runs
+were similar (broad enhanced 1.021–1.098 ms/frame). Broad plan compilation took
+245.880 ms in the final run; enhancement settings do not recompile geometry.
+Observed process high-water RSS for these probes was about 3.6–6.3 MiB, including
+both paths, plan and process runtime; this is not an incremental memory budget or
+native UI RSS claim. Enhanced sampling uses one additional bounded row-prefix
+representation and the accurate output colors, avoiding per-zone image scans.
+
+The method favors colorful area with bounded continuous influence, then applies
+linear-sRGB luminance-preserving gamut-limited saturation and a linear-light blend.
+It does not choose a winning hue; balanced opposing hues can still cancel, and
+capture downsampling can already have lost tiny details. Color weighting can
+change mean luminance. See [configuration](configuration.md#soft-ambience).
+
+The rebuilt executable is
+`/home/vladimir/Projects/Developer/dartmoor/target/release/lumen-desktop`.
+Headless/synthetic and localhost mocks only: no new native UI, real desktop
+capture, physical WLED/HA lights, keyring or Windows/macOS runtime verification.
+
+## Dark zones and Music Pulse — 2026-10-06
+
+Implemented saved per-zone black-to-off gating with sensitivity, and a separate
+Music workspace with Linux PipeWire playback-monitor capture, bounded bass-onset
+analysis, a uniform Pulse palette, live effect controls and explicit source
+handover. Existing Soft ambience, crop, per-segment mapping and mapped-buffer
+video downsampling remain in place. The application directly uses the already
+locked PipeWire 0.10.1 dependency; no capture/vendor implementation was changed
+for the music backend.
+
+Final checks used Fedora Rust 1.98.1 and matching staged rustfmt/Clippy; the
+repository toolchain pin is 1.99.0, which is unavailable on this host:
+
+- Application tests: **148 passed, 0 failed, 1 intentionally ignored** capture
+  benchmark. Localhost mock tests ran with authorized socket access.
+- Vendored backend tests: **23 passed**.
+- Formatting, strict all-target Clippy (`-D warnings`), whitespace checks and
+  release build of binaries/examples: passed.
+- Added coverage includes independent dark regions, confirmation/hysteresis,
+  live sensitivity/disable changes, smoothing-history clearing, Soft ambience
+  and active-picture cropping, strict defaults/persistence, conditional controls
+  and history, Music navigation versus explicit start, live effects without
+  source reopening, source handover, onset/silence/noise/stereo analysis and
+  missing-audio failure without fabricated frame freshness.
+
+An initial sandbox run failed localhost socket tests and exposed an immediate
+worker-drop assertion racing asynchronous shutdown. The assertion now waits for
+bounded eventual cleanup; the final authorized suite above passed. The release
+synthetic Music demo produced 105 frames and seven onsets, with approximately
+0.010–0.011 ms reported processing per frame. This does not measure native audio
+capture, device latency or physical timing.
+
+Repeated release Soft ambience sampling probes measured 0.014 ms accurate versus
+0.052 ms enhanced for the typical 60-zone strip (+0.038 ms), and 0.372 versus
+1.090 ms for 2,048 broad-strip zones (+0.718 ms). Broad plan compilation measured
+243.479 ms. These synthetic sampling-only measurements do not establish dark-gate
+costs or end-to-end performance; the earlier broader workload table remains above.
+
+An isolated PipeWire test-server experiment did not establish native playback
+success and was discontinued at the user's request. Real desktop audio testing
+will be done by the user. No new native UI, real capture, physical WLED/HA,
+keyring or Windows/macOS runtime verification is claimed. The user's prior
+physical testing used WLED only; Home Assistant coverage remains localhost mocks.
+
+Rebuilt executable:
+`/home/vladimir/Projects/Developer/dartmoor/target/release/lumen-desktop`.
+
+## Music sensitivity adjustment — 2026-10-06
+
+Following the user's real desktop-audio feedback, lowered the relative bass-rise
+threshold from 3.5–1.5× to 2.1–1.12× over the sensitivity range, with a perceptual
+square-root mapping (default 50% now about 1.41× instead of 2.5×). Sensitivity
+also lowers absolute bass/quiet gates. A 10 ms bass-energy smoother and positive
+rise requirement suppress sustained-tone retriggers. A detected onset holds its
+full target for 60 ms, allowing the default 20 ms attack envelope to reach a
+visible peak; silence overrides the hold. Existing saved sensitivity values are
+retained and use the revised response. Source capture and output routes are
+unchanged.
+
+Added regressions cover low-level bass reaching visible output, sub-gate noise
+remaining black across sensitivity settings, repeated 30% bass rises over a
+sustained bed, a visible brief-beat peak followed by decay, and steady 40–160 Hz
+bass without continuing onset triggers at maximum sensitivity. Updated the
+existing sensitivity comparison for the new range. The UI test fixture and smoke
+mode now reset the workspace when replacing configuration with defaults; real
+saved Music mode had exposed their previous dependency on user configuration.
+
+Final authorized localhost-capable application suite: **152 passed, 0 failed,
+1 intentionally ignored**. Strict all-target Clippy, formatting, whitespace
+checks and release build of binaries/examples passed with Fedora Rust 1.98.1.
+The first run exposed the old sensitivity test's threshold assumptions and ten
+UI tests inheriting saved Music workspace; both were corrected before the final
+passing run. No new isolated audio server, native playback or physical-light
+probe was run; real listening/output assessment remains with the user. Existing
+Home Assistant verification remains mocks only.
+
+## Advanced Music — 2026-10-06
+
+Implemented the approved multiband/spectral/tempo plan in one saved Advanced
+detector, keeping the previously user-tested Classic detector available. The
+new mode emphasizes midbass/body attacks, separates upper-band accents, follows
+confident tempo/phase estimates, and falls back to direct reactions. Added live
+Subbass weight, Sparkle amount and Follow beat controls, band/tracking diagnostics
+and logical-zone previews. Bulbs retain broadcast output; single-color strips
+receive restrained whole-light accents. Existing video sampling/crop/ambience,
+segment routing and mapped-buffer video capture were preserved; this increment
+changes no capture/vendor implementation.
+
+Music polling/analysis now runs independently of 30 Hz color output. Audio sample
+counts drive event timing; coalesced PipeWire drop/format-change signals reset
+continuity. Explicit idle remains distinguishable from timeouts. Spectral work
+uses fixed 2,048-point stereo transforms, reusable scratch/history and precomputed
+weights; event histories are capped at 96 main and 96 upper-band entries. RustFFT
+6.4.1 plus three supporting packages were added to the application lockfile;
+existing locked dependency versions were not upgraded. The first sandbox fetch
+failed DNS resolution; the authorized dependency fetch succeeded.
+
+Final Linux checks used Fedora Rust 1.98.1 with matching staged rustfmt/Clippy;
+the repository 1.99.0 pin remains unavailable on this host:
+
+- `cargo test --locked` with authorized localhost socket access:
+  **165 passed, 0 failed, 2 ignored**. The ignored tests are the existing native
+  capture benchmark and the new explicitly invoked release Music benchmark.
+- `cargo test --offline --manifest-path vendor/scap/Cargo.toml --lib`:
+  **23 passed**.
+- Formatting, strict `cargo clippy --locked --all-targets -- -D warnings`,
+  `git diff --check`, and `cargo build --locked --release --bins --examples`:
+  passed.
+- Release Music analysis benchmark invoked separately: **passed**.
+- Release CLI `--music-demo-seconds 5`: **166 output frames**, eleven main
+  attacks, 120 BPM following by the later snapshots, no stream resets. This
+  fixture contains bass pulses without hats, so zero sparkle events are expected.
+  The polling loop measures about 5.5 seconds including its initial observation.
+
+Added deterministic coverage checks independent bands/opposite-phase stereo,
+quiet input and non-finite samples, steady tones and pitch movement, repeated
+midbass attacks with upper subdivisions, compressed bass beds versus sensitivity,
+subbass influence, spatial accents/bulb broadcast/zero brightness, chunk-boundary
+invariance, detector changes and discontinuities, tempo acquisition at
+60/90/120/180 BPM, missing-beat prediction, prediction/confirmed-event merging,
+irregular events and hats alone, and tempo-change recovery. A known 120 BPM
+fixture matches at least 22 of 24 main attacks within 70 ms after their source
+onsets without duplicate main events per beat. This is sample-analysis timing,
+not desktop capture or physical-light latency. Settings defaults/ranges/strict
+JSON/persistence, conditional controls/history and live engine Apply remain
+covered. There is no annotated real-music recognition-accuracy result.
+
+Initial development checks caught spectral leakage from upper attacks into main
+pulses and insufficient response to smaller attacks over sustained bass. Energy
+share gating and the wider sensitivity range fixed those fixture regressions.
+The new timing check, final full suite and strict lint checks passed afterward.
+
+Release benchmark command:
+`cargo test --locked --release music_analysis_benchmark -- --ignored --nocapture`.
+Each mode warms up with eight seconds of deterministic 180 Hz attacks plus
+6.5 kHz accents, then measures 8,000 ten-millisecond hops. Rendering separately
+measures 1,000 60-zone outputs and 1,000 sets of eight 256-zone outputs:
+
+| Detector | Mean analysis ms/hop | p95 | p99 | Observed maximum | 60-zone color production ms/frame | 2,048-zone color production ms/frame |
+|---|---:|---:|---:|---:|---:|---:|
+| Classic | 0.0024 | 0.0024 | 0.0024 | 0.0074 | 0.0001 | 0.0010 |
+| Advanced | 0.0213 | 0.0211 | 0.1594 | 0.2344 | 0.0015 | 0.0486 |
+
+Added mean analysis cost is approximately 0.0189 ms per 10 ms hop on this host.
+The p99 includes periodic candidate estimation spikes; the observed maximum is
+not a universal upper bound. Advanced p95 meets the provisional 2 ms/hop target
+for this fixture. These measurements include analyzer work or logical-zone color
+production respectively; they exclude capture/event-loop copying, UI, physical
+LED expansion, adapters/network scheduling and device latency. They are not an
+end-to-end performance or worst-case workload claim.
+
+The user previously verified real desktop playback and WLED response of Classic.
+The new Advanced behavior was checked with deterministic signals, headless UI,
+CLI demo and localhost mocks only. No new native playback server/probe, physical
+WLED/HA, keyring or Windows/macOS runtime test was performed. Home Assistant has
+no real-device verification. Listening quality and audio-to-light timing remain
+for the user's desktop playback test.
+
+Rebuilt executable:
+`/home/vladimir/Projects/Developer/dartmoor/target/release/lumen-desktop`.

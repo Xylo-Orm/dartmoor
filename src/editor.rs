@@ -175,8 +175,14 @@ fn config_bytes(config: &Config) -> usize {
         bytes = bytes
             .saturating_add(light.id.len())
             .saturating_add(light.name.len());
-        if let Shape::Strip { points, .. } = &light.shape {
+        if let Shape::Strip {
+            points,
+            segment_leds,
+            ..
+        } = &light.shape
+        {
             bytes = bytes.saturating_add(points.len().saturating_mul(size_of::<Point>()));
+            bytes = bytes.saturating_add(segment_leds.len().saturating_mul(size_of::<usize>()));
         }
         match &light.route {
             Route::Wled {
@@ -210,13 +216,35 @@ pub fn zone_positions_scaled(shape: &Shape, zones: usize, width: f32, height: f3
     match shape {
         Shape::Bulb { center, .. } => vec![*center; zones],
         Shape::Strip {
-            points, reverse, ..
+            points,
+            reverse,
+            segment_leds,
+            ..
         } => {
             let Some(&first) = points.first() else {
                 return Vec::new();
             };
             if points.iter().any(|point| !finite(*point)) {
                 return Vec::new();
+            }
+            if !segment_leds.is_empty() && zones > 1 {
+                if segment_leds.len() != points.len().saturating_sub(1) {
+                    return Vec::new();
+                }
+                let allocation = crate::core::segment_zone_counts(segment_leds, zones);
+                let mut positions: Vec<_> = points
+                    .windows(2)
+                    .zip(allocation)
+                    .flat_map(|(pair, count)| {
+                        (0..count).map(move |zone| {
+                            interpolate(pair[0], pair[1], (zone as f32 + 0.5) / count as f32)
+                        })
+                    })
+                    .collect();
+                if *reverse {
+                    positions.reverse();
+                }
+                return positions;
             }
             let lengths: Vec<f32> = points
                 .windows(2)
@@ -300,6 +328,83 @@ pub fn insert_path_point_at(points: &mut Vec<Point>, segment: usize, position: P
     }
     points.insert(segment + 1, projected);
     true
+}
+
+/// Split physical LEDs at the inserted point, preserving their total. A
+/// one-LED segment cannot be split into two nonempty physical segments.
+pub fn insert_strip_point(
+    points: &mut Vec<Point>,
+    counts: &mut Vec<usize>,
+    segment: usize,
+    position: Point,
+) -> bool {
+    let split = if counts.is_empty() {
+        None
+    } else {
+        let Some(&count) = counts.get(segment) else {
+            return false;
+        };
+        if count < 2 || counts.len() + 1 != points.len() {
+            return false;
+        }
+        let Some(pair) = points.get(segment..).and_then(|tail| tail.get(..2)) else {
+            return false;
+        };
+        let Some(projected) = project_segment(pair[0], pair[1], normalized(position)) else {
+            return false;
+        };
+        let fraction = distance(pair[0], projected) / distance(pair[0], pair[1]);
+        let first = ((count as f32 * fraction).round() as usize).clamp(1, count - 1);
+        Some((first, count - first))
+    };
+    if !insert_path_point_at(points, segment, position) {
+        return false;
+    }
+    if let Some((first, second)) = split {
+        counts[segment] = first;
+        counts.insert(segment + 1, second);
+    }
+    true
+}
+
+/// Merge adjacent LED ranges when deleting an interior point. At either end,
+/// transfer that range to the neighboring segment so no physical LEDs vanish.
+pub fn remove_strip_point(points: &mut Vec<Point>, counts: &mut Vec<usize>, index: usize) -> bool {
+    if !counts.is_empty() && counts.len() + 1 != points.len() {
+        return false;
+    }
+    if !counts.is_empty() {
+        let retained: Vec<_> = points
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .map(|(_, point)| point)
+            .collect();
+        if retained.windows(2).any(|pair| pair[0] == pair[1]) {
+            return false;
+        }
+    }
+    if !remove_path_point(points, index) {
+        return false;
+    }
+    if !counts.is_empty() {
+        let removed = if index == 0 { 0 } else { index - 1 };
+        let count = counts.remove(removed);
+        let neighbor = removed.min(counts.len() - 1);
+        counts[neighbor] += count;
+    }
+    true
+}
+
+/// Starting allocation for enabling manual counts or replacing a path.
+/// Presets divide LEDs evenly; the user can then enter the actual side counts.
+pub fn evenly_distributed_leds(total: usize, segments: usize) -> Vec<usize> {
+    if segments == 0 || total < segments {
+        return Vec::new();
+    }
+    (0..segments)
+        .map(|i| total / segments + usize::from(i < total % segments))
+        .collect()
 }
 
 /// Keep at least two handles and a nonzero path when removing a handle.
@@ -389,6 +494,85 @@ fn interpolate(a: Point, b: Point, fraction: f32) -> Point {
 mod tests {
     use super::*;
 
+    #[test]
+    fn segment_preview_uses_led_counts_in_both_directions_and_aspect_ratios() {
+        let mut shape = Shape::Strip {
+            points: vec![point(0.1, 0.1), point(0.9, 0.1), point(0.9, 0.9)],
+            radius: 0.04,
+            segment_leds: vec![2, 4],
+            reverse: false,
+        };
+        let expected = vec![
+            point(0.3, 0.1),
+            point(0.7, 0.1),
+            point(0.9, 0.2),
+            point(0.9, 0.4),
+            point(0.9, 0.6),
+            point(0.9, 0.8),
+        ];
+        for (width, height) in [(16.0, 9.0), (9.0, 16.0), (1.0, 1.0)] {
+            for (actual, expected) in zone_positions_scaled(&shape, 6, width, height)
+                .into_iter()
+                .zip(&expected)
+            {
+                assert_point(actual, *expected);
+            }
+        }
+        if let Shape::Strip { reverse, .. } = &mut shape {
+            *reverse = true;
+        }
+        for (actual, expected) in zone_positions(&shape, 6)
+            .into_iter()
+            .zip(expected.iter().rev())
+        {
+            assert_point(actual, *expected);
+        }
+        assert_eq!(zone_positions(&shape, 2).len(), 2);
+    }
+
+    #[test]
+    fn editing_segments_splits_and_merges_leds_without_changing_the_total() {
+        let original = vec![point(0.0, 0.0), point(1.0, 0.0), point(1.0, 1.0)];
+        let mut points = original.clone();
+        let mut counts = vec![8, 3];
+        assert!(insert_strip_point(
+            &mut points,
+            &mut counts,
+            0,
+            point(0.25, 0.0)
+        ));
+        assert_eq!(counts, [2, 6, 3]);
+        assert!(remove_strip_point(&mut points, &mut counts, 1));
+        assert_eq!(points, original);
+        assert_eq!(counts, [8, 3]);
+        for endpoint in [0, 2] {
+            let mut points = original.clone();
+            let mut counts = vec![8, 3];
+            assert!(remove_strip_point(&mut points, &mut counts, endpoint));
+            assert_eq!(counts, [11]);
+            assert_eq!(points.len(), 2);
+        }
+        let mut points = original.clone();
+        let mut counts = vec![1, 3];
+        assert!(!insert_strip_point(
+            &mut points,
+            &mut counts,
+            0,
+            point(0.5, 0.0)
+        ));
+        assert_eq!(points, original);
+        assert_eq!(counts, [1, 3]);
+        assert!(!insert_strip_point(
+            &mut points,
+            &mut counts,
+            1,
+            point(1.0, 0.0)
+        ));
+        assert_eq!(counts, [1, 3]);
+        assert_eq!(evenly_distributed_leds(11, 4), [3, 3, 3, 2]);
+        assert!(evenly_distributed_leds(2, 4).is_empty());
+    }
+
     fn point(x: f32, y: f32) -> Point {
         Point { x, y }
     }
@@ -397,6 +581,7 @@ mod tests {
         Shape::Strip {
             points,
             radius: 0.05,
+            segment_leds: vec![],
             reverse,
         }
     }

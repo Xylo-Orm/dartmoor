@@ -15,20 +15,25 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help") {
         println!(
-            "Lumen Desktop\n  --demo-seconds N       synthetic capture + mock output (no UI)\n  --capture-probe N      real screen capture + mock output (portal permission)\n  --benchmark           deterministic sampling workload\n  --ui-smoke-seconds N   synthetic native UI, minimize/restore/close\n  --real-capture        with UI smoke: real portal source, mock lights\nWithout flags: native editor. Close stops synchronization."
+            "Lumen Desktop\n  --demo-seconds N       synthetic capture + mock output (no UI)\n  --capture-probe N      real screen capture + mock output (portal permission)\n  --music-demo-seconds N synthetic music pulses + mock output\n  --music-probe N        Linux playback audio + mock output\n  --benchmark           deterministic sampling workload\n  --ui-smoke-seconds N   synthetic native UI, minimize/restore/close\n  --real-capture        with UI smoke: real portal source, mock lights\nWithout flags: native editor. Close stops synchronization."
         );
         return Ok(());
     }
     if args.iter().any(|a| a == "--benchmark") {
         return benchmark();
     }
-    for (flag, real) in [("--demo-seconds", false), ("--capture-probe", true)] {
+    for (flag, real, music) in [
+        ("--demo-seconds", false, false),
+        ("--capture-probe", true, false),
+        ("--music-demo-seconds", false, true),
+        ("--music-probe", true, true),
+    ] {
         if let Some(i) = args.iter().position(|a| a == flag) {
             let seconds = args
                 .get(i + 1)
                 .ok_or_else(|| anyhow::anyhow!("Missing seconds"))?
                 .parse::<u64>()?;
-            return probe(seconds, real);
+            return probe(seconds, real, music);
         }
     }
     let smoke = args
@@ -60,7 +65,7 @@ fn main() -> anyhow::Result<()> {
     )
     .map_err(|e| anyhow::anyhow!("Could not start desktop editor: {e}"))
 }
-fn probe(seconds: u64, real: bool) -> anyhow::Result<()> {
+fn probe(seconds: u64, real: bool, music: bool) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -68,19 +73,43 @@ fn probe(seconds: u64, real: bool) -> anyhow::Result<()> {
     runtime.block_on(async {
         let engine = Engine::new(&runtime);
         let mut config = Config::default();
-        if real {
+        if music {
+            config.mode = lumen_desktop::music::SyncMode::Music;
+            config.music.input = if real {
+                lumen_desktop::music::AudioInput::Playback
+            } else {
+                lumen_desktop::music::AudioInput::Demo
+            };
+        } else if real {
             config.source = CaptureSelection::Desktop { id: None };
         }
         engine.send(Command::Start(config))?;
-        let start = Instant::now();
+        let requested = Instant::now();
+        let mut start = None;
         let mut error = None;
-        while start.elapsed() < Duration::from_secs(seconds) {
+        while start.is_none_or(|start: Instant| start.elapsed() < Duration::from_secs(seconds)) {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let s = engine.snapshots.borrow().clone();
+            if s.frames > 0 {
+                start.get_or_insert_with(Instant::now);
+            } else if requested.elapsed() >= Duration::from_secs(120) {
+                error = Some(
+                    "Capture did not start within 120 seconds; answer or cancel the portal chooser"
+                        .into(),
+                );
+                break;
+            }
             println!(
                 "{:?}: {} frames; sample {:.3} ms; {}",
                 s.state, s.frames, s.processing_ms, s.message
             );
+            if let Some(audio) = s.music {
+                println!(
+                    "audio rms {:.3}; bands {:?}; pulse {:.3}; {} attacks; {} sparkles; tempo {:?}; confidence {:.2}; {} predictions; {} resets",
+                    audio.rms, audio.bands, audio.pulse, audio.onsets, audio.sparkle_onsets,
+                    audio.bpm, audio.confidence, audio.predicted_beats, audio.discontinuities
+                );
+            }
             if s.state == SessionState::Error {
                 error = Some(s.message);
                 break;

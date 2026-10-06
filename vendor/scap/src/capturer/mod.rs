@@ -59,6 +59,9 @@ pub struct Area {
     pub size: Size,
 }
 
+#[cfg(target_os = "linux")]
+pub type MappedFrameProcessor = fn(&[u8], i32, i32, usize, [usize; 3], usize) -> Option<Frame>;
+
 /// Options passed to the screen capturer
 #[derive(Debug, Default, Clone)]
 pub struct Options {
@@ -71,6 +74,10 @@ pub struct Options {
     pub output_resolution: Resolution,
     // excluded targets will only work on macOS
     pub excluded_targets: Option<Vec<Target>>,
+    /// Linux only: process validated, borrowed pixels before returning the
+    /// PipeWire buffer. The slice includes row padding; do not retain it.
+    #[cfg(target_os = "linux")]
+    pub mapped_frame_processor: Option<MappedFrameProcessor>,
 }
 
 /// Screen capturer class
@@ -185,8 +192,9 @@ impl Capturer {
             };
             // The macOS mailbox already selects the latest pending image. Do
             // not drain another sample: a later Idle must not replace it.
-            // Other backends drain only one item, keeping the call bounded.
-            #[cfg(not(target_os = "macos"))]
+            // Windows drains only one item, keeping the call bounded. Linux
+            // reserves capacity before processing and has no stale backlog.
+            #[cfg(target_os = "windows")]
             let item = self.rx.try_recv().unwrap_or(item);
             if let Some(frame) = self.engine.process_channel_item(item) {
                 if self.engine.has_backend_error() {

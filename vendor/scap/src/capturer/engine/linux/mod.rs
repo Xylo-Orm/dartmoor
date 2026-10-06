@@ -3,11 +3,11 @@ use std::{
     os::fd::{FromRawFd, IntoRawFd, OwnedFd},
     sync::{
         atomic::{AtomicBool, AtomicU8},
-        mpsc::{self, sync_channel, SyncSender},
+        mpsc::{sync_channel, SyncSender},
         Arc,
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use pipewire as pw;
@@ -37,6 +37,7 @@ use crate::{
 };
 
 use self::{error::LinCapError, portal::ScreenCastPortal};
+use super::FrameSender;
 
 mod error;
 mod portal;
@@ -50,9 +51,56 @@ struct CaptureState {
 
 #[derive(Clone)]
 struct ListenerUserData {
-    pub tx: mpsc::SyncSender<Frame>,
+    pub tx: FrameSender,
     pub format: spa::param::video::VideoInfoRaw,
     state: Arc<CaptureState>,
+    processor: Option<crate::capturer::MappedFrameProcessor>,
+    interval: Duration,
+    next_frame: Option<Instant>,
+    metrics: Metrics,
+}
+
+#[derive(Clone)]
+struct Metrics {
+    since: Instant,
+    received: u64,
+    delivered: u64,
+    processing: Duration,
+}
+
+impl Metrics {
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            received: 0,
+            delivered: 0,
+            processing: Duration::ZERO,
+        }
+    }
+    fn report(&mut self) {
+        let elapsed = self.since.elapsed().as_secs_f64();
+        if elapsed >= 5.0 {
+            eprintln!("pipewire: incoming {:.1} fps, delivered {:.1} fps, buffer processing {:.3} ms/frame", self.received as f64 / elapsed, self.delivered as f64 / elapsed, self.processing.as_secs_f64() * 1000.0 / self.delivered.max(1) as f64);
+            *self = Self::new();
+        }
+    }
+}
+
+fn frame_due(deadline: Option<Instant>, now: Instant, interval: Duration) -> bool {
+    // Small callback jitter must not turn a negotiated 30 FPS stream into
+    // 15 FPS. Accumulate deadlines rather than resetting them on every frame.
+    deadline.is_none_or(|deadline| now + interval.min(Duration::from_millis(1)) >= deadline)
+}
+
+fn next_deadline(deadline: Option<Instant>, now: Instant, interval: Duration) -> Instant {
+    deadline.map_or(now + interval, |deadline| {
+        let next = deadline + interval;
+        if next <= now {
+            now + interval
+        } else {
+            next
+        }
+    })
 }
 
 fn param_changed_callback(
@@ -81,6 +129,9 @@ fn param_changed_callback(
             .state
             .failed
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        let size = user_data.format.size();
+        eprintln!("pipewire: negotiated {}x{} {:?}, framerate {:?}, max {:?}; mapped-buffer downsampling={}", size.width, size.height, user_data.format.format(), user_data.format.framerate(), user_data.format.max_framerate(), user_data.processor.is_some());
     }
 }
 
@@ -126,6 +177,33 @@ fn packed_rows(
     height: usize,
     bytes_per_pixel: usize,
 ) -> Option<Vec<u8>> {
+    let mapped = validated_rows(
+        mapped,
+        offset,
+        chunk_size,
+        stride,
+        width,
+        height,
+        bytes_per_pixel,
+    )?;
+    let row_bytes = width.checked_mul(bytes_per_pixel)?;
+    let mut result = Vec::with_capacity(row_bytes.checked_mul(height)?);
+    for row in 0..height {
+        let start = row * stride as usize;
+        result.extend_from_slice(&mapped[start..start + row_bytes]);
+    }
+    Some(result)
+}
+
+fn validated_rows(
+    mapped: &[u8],
+    offset: usize,
+    chunk_size: usize,
+    stride: i32,
+    width: usize,
+    height: usize,
+    bytes_per_pixel: usize,
+) -> Option<&[u8]> {
     if width == 0 || height == 0 || stride <= 0 {
         return None;
     }
@@ -138,12 +216,7 @@ fn packed_rows(
     if span > chunk_size || offset.checked_add(span)? > mapped.len() {
         return None;
     }
-    let mut result = Vec::with_capacity(row_bytes.checked_mul(height)?);
-    for row in 0..height {
-        let start = offset + row * stride;
-        result.extend_from_slice(&mapped[start..start + row_bytes]);
-    }
-    Some(result)
+    Some(&mapped[offset..offset + span])
 }
 
 fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
@@ -153,7 +226,14 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
     }
     // Every successfully dequeued buffer must be returned, including malformed
     // or unsupported buffers. Never queue a null pointer.
-    let frame = (|| unsafe {
+    let now = Instant::now();
+    user_data.metrics.received += 1;
+    user_data.metrics.report();
+    if !frame_due(user_data.next_frame, now, user_data.interval) {
+        unsafe { stream.queue_raw_buffer(pw_buffer) };
+        return;
+    }
+    let sent = user_data.tx.try_send_with(|| unsafe {
         let buffer = (*pw_buffer).buffer;
         if buffer.is_null() || (*buffer).n_datas < 1 || (*buffer).datas.is_null() {
             return None;
@@ -174,6 +254,35 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
             _ => return None,
         };
         let mapped = std::slice::from_raw_parts(data.data.cast::<u8>(), data.maxsize as usize);
+        let timestamp = get_timestamp(buffer).max(0) as u64;
+        if let Some(processor) = user_data.processor {
+            let rows = validated_rows(
+                mapped,
+                chunk.offset as usize,
+                chunk.size as usize,
+                chunk.stride,
+                size.width as usize,
+                size.height as usize,
+                bpp,
+            )?;
+            let order = match format {
+                VideoFormat::BGRx => [2, 1, 0],
+                VideoFormat::xBGR => [3, 2, 1],
+                _ => [0, 1, 2],
+            };
+            let mut frame = processor(
+                rows,
+                size.width as i32,
+                size.height as i32,
+                bpp,
+                order,
+                chunk.stride as usize,
+            )?;
+            if let Frame::RGB(ref mut rgb) = frame {
+                rgb.display_time = timestamp;
+            }
+            return Some(frame);
+        }
         let pixels = packed_rows(
             mapped,
             chunk.offset as usize,
@@ -183,7 +292,6 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
             size.height as usize,
             bpp,
         )?;
-        let timestamp = get_timestamp(buffer).max(0) as u64;
         let width = size.width as i32;
         let height = size.height as i32;
         Some(match format {
@@ -213,17 +321,19 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
             }),
             _ => return None,
         })
-    })();
+    });
     unsafe { stream.queue_raw_buffer(pw_buffer) };
-    if let Some(frame) = frame {
-        let _ = user_data.tx.try_send(frame);
+    if sent {
+        user_data.next_frame = Some(next_deadline(user_data.next_frame, now, user_data.interval));
+        user_data.metrics.delivered += 1;
+        user_data.metrics.processing += now.elapsed();
     }
 }
 
 // TODO: Format negotiation
 fn pipewire_capturer(
     options: Options,
-    tx: mpsc::SyncSender<Frame>,
+    tx: FrameSender,
     ready_sender: &SyncSender<bool>,
     stream_id: u32,
     state: Arc<CaptureState>,
@@ -239,6 +349,10 @@ fn pipewire_capturer(
         tx,
         format: Default::default(),
         state: state.clone(),
+        processor: options.mapped_frame_processor,
+        interval: Duration::from_secs_f64(1.0 / options.fps.max(1) as f64),
+        next_frame: None,
+        metrics: Metrics::new(),
     };
 
     let stream = pw::stream::StreamBox::new(
@@ -258,58 +372,7 @@ fn pipewire_capturer(
         .process(process_callback)
         .register()?;
 
-    let obj = pw::spa::pod::object!(
-        pw::spa::utils::SpaTypes::ObjectParamFormat,
-        pw::spa::param::ParamType::EnumFormat,
-        pw::spa::pod::property!(FormatProperties::MediaType, Id, MediaType::Video),
-        pw::spa::pod::property!(FormatProperties::MediaSubtype, Id, MediaSubtype::Raw),
-        pw::spa::pod::property!(
-            FormatProperties::VideoFormat,
-            Choice,
-            Enum,
-            Id,
-            pw::spa::param::video::VideoFormat::RGB,
-            pw::spa::param::video::VideoFormat::xBGR,
-            pw::spa::param::video::VideoFormat::RGBx,
-            pw::spa::param::video::VideoFormat::BGRx,
-        ),
-        pw::spa::pod::property!(
-            FormatProperties::VideoSize,
-            Choice,
-            Range,
-            Rectangle,
-            pw::spa::utils::Rectangle {
-                // Default
-                width: 128,
-                height: 128,
-            },
-            pw::spa::utils::Rectangle {
-                // Min
-                width: 1,
-                height: 1,
-            },
-            pw::spa::utils::Rectangle {
-                // Max
-                width: 16384,
-                height: 16384,
-            }
-        ),
-        pw::spa::pod::property!(
-            FormatProperties::VideoFramerate,
-            Choice,
-            Range,
-            Fraction,
-            pw::spa::utils::Fraction {
-                num: options.fps,
-                denom: 1
-            },
-            pw::spa::utils::Fraction { num: 0, denom: 1 },
-            pw::spa::utils::Fraction {
-                num: 1000,
-                denom: 1
-            }
-        ),
-    );
+    let obj = capture_format(options.fps);
 
     let metas_obj = pw::spa::pod::object!(
         SpaTypes::ObjectParamMeta,
@@ -357,15 +420,85 @@ fn pipewire_capturer(
 
     let pw_loop = mainloop.loop_();
 
-    // User has called Capturer::start() and we start the main loop
     while state.phase.load(std::sync::atomic::Ordering::Relaxed) == 1
-        && /* If the stream state got changed to `Error`, we exit. TODO: tell user that we exited */
-          !state.failed.load(std::sync::atomic::Ordering::Relaxed)
+        && !state.failed.load(std::sync::atomic::Ordering::Relaxed)
     {
         pw_loop.iterate(pw::loop_::Timeout::Finite(Duration::from_millis(100)));
     }
 
     Ok(())
+}
+
+fn capture_format(fps: u32) -> spa::pod::Object {
+    pw::spa::pod::object!(
+        pw::spa::utils::SpaTypes::ObjectParamFormat,
+        pw::spa::param::ParamType::EnumFormat,
+        pw::spa::pod::property!(FormatProperties::MediaType, Id, MediaType::Video),
+        pw::spa::pod::property!(FormatProperties::MediaSubtype, Id, MediaSubtype::Raw),
+        pw::spa::pod::property!(
+            FormatProperties::VideoFormat,
+            Choice,
+            Enum,
+            Id,
+            pw::spa::param::video::VideoFormat::BGRx,
+            pw::spa::param::video::VideoFormat::xBGR,
+            pw::spa::param::video::VideoFormat::RGBx,
+            pw::spa::param::video::VideoFormat::RGB,
+        ),
+        pw::spa::pod::property!(
+            FormatProperties::VideoSize,
+            Choice,
+            Range,
+            Rectangle,
+            pw::spa::utils::Rectangle {
+                // Default
+                width: 128,
+                height: 128,
+            },
+            pw::spa::utils::Rectangle {
+                // Min
+                width: 1,
+                height: 1,
+            },
+            pw::spa::utils::Rectangle {
+                // Max
+                width: 16384,
+                height: 16384,
+            }
+        ),
+        pw::spa::pod::property!(
+            FormatProperties::VideoFramerate,
+            Choice,
+            Range,
+            Fraction,
+            pw::spa::utils::Fraction {
+                num: fps.max(1),
+                denom: 1
+            },
+            pw::spa::utils::Fraction { num: 0, denom: 1 },
+            pw::spa::utils::Fraction {
+                num: fps.max(1),
+                denom: 1
+            }
+        ),
+        // GNOME uses variable-rate streams (framerate=0/1), and reads this
+        // separate property to throttle compositor capture/readback work.
+        pw::spa::pod::property!(
+            FormatProperties::VideoMaxFramerate,
+            Choice,
+            Range,
+            Fraction,
+            pw::spa::utils::Fraction {
+                num: fps.max(1),
+                denom: 1
+            },
+            pw::spa::utils::Fraction { num: 1, denom: 1 },
+            pw::spa::utils::Fraction {
+                num: fps.max(1),
+                denom: 1
+            }
+        ),
+    )
 }
 
 pub struct LinuxCapturer {
@@ -376,7 +509,7 @@ pub struct LinuxCapturer {
 }
 
 impl LinuxCapturer {
-    pub fn new(options: &Options, tx: mpsc::SyncSender<Frame>) -> Result<Self, LinCapError> {
+    pub fn new(options: &Options, tx: FrameSender) -> Result<Self, LinCapError> {
         let connection = dbus::blocking::Connection::new_session()?;
         let (stream, session, remote) = ScreenCastPortal::new(&connection)
             .show_cursor(options.show_cursor)?
@@ -444,16 +577,66 @@ impl Drop for LinuxCapturer {
     }
 }
 
-pub fn create_capturer(
-    options: &Options,
-    tx: mpsc::SyncSender<Frame>,
-) -> Result<LinuxCapturer, LinCapError> {
+pub fn create_capturer(options: &Options, tx: FrameSender) -> Result<LinuxCapturer, LinCapError> {
     LinuxCapturer::new(options, tx)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::packed_rows;
+    use super::*;
+
+    #[test]
+    fn negotiation_caps_fixed_and_variable_frame_rates() {
+        use spa::pod::{ChoiceValue, Value};
+        for fps in [1, 30, 60] {
+            let object = capture_format(fps);
+            for key in [
+                FormatProperties::VideoFramerate,
+                FormatProperties::VideoMaxFramerate,
+            ] {
+                let property = object
+                    .properties
+                    .iter()
+                    .find(|p| p.key == key.as_raw())
+                    .unwrap();
+                let Value::Choice(ChoiceValue::Fraction(choice)) = &property.value else {
+                    panic!("expected fraction range")
+                };
+                let spa::utils::ChoiceEnum::Range { default, min, max } = choice.1 else {
+                    panic!("expected bounded range")
+                };
+                assert_eq!(default.num, fps);
+                assert_eq!(max.num, fps);
+                assert_eq!(max.denom, 1);
+                assert!(min.num <= fps);
+            }
+        }
+    }
+
+    #[test]
+    fn pacing_tolerates_jitter_without_halving_fps_or_catching_up_after_stalls() {
+        let start = Instant::now();
+        let interval = Duration::from_secs_f64(1.0 / 30.0);
+        let mut deadline = None;
+        for i in 0..100 {
+            let now = start + interval * i;
+            let now = if i % 2 == 1 {
+                now - Duration::from_micros(300)
+            } else {
+                now
+            };
+            assert!(frame_due(deadline, now, interval));
+            deadline = Some(next_deadline(deadline, now, interval));
+            assert!(!frame_due(
+                deadline,
+                now + Duration::from_millis(1),
+                interval
+            ));
+        }
+        let later = start + Duration::from_secs(10);
+        assert!(frame_due(deadline, later, interval));
+        assert_eq!(next_deadline(deadline, later, interval), later + interval);
+    }
 
     #[test]
     fn strips_offset_and_row_padding() {

@@ -1,5 +1,6 @@
 mod ha_picker;
 mod layout_dialog;
+mod music_panel;
 mod panels;
 mod text;
 use crate::{
@@ -170,6 +171,7 @@ pub struct App {
     engine: Option<Engine>,
     runtime: Option<tokio::runtime::Runtime>,
     selected: Option<usize>,
+    workspace: crate::music::SyncMode,
     selected_point: usize,
     show_zones: bool,
     compact_inspector: bool,
@@ -211,6 +213,7 @@ impl App {
         let mut app = Self {
             saved_config: config.clone(),
             config_path: config::path(),
+            workspace: config.mode,
             config,
             engine: Some(engine),
             runtime: Some(runtime),
@@ -243,6 +246,7 @@ impl App {
         };
         if smoke.is_some() {
             app.config = Config::default();
+            app.workspace = app.config.mode;
             if real_capture {
                 app.config.source = CaptureSelection::Desktop { id: None };
             }
@@ -286,6 +290,7 @@ impl App {
             Shape::Strip {
                 points: vec![Point { x: 0.1, y: 0.9 }, Point { x: 0.9, y: 0.9 }],
                 radius: 0.05,
+                segment_leds: vec![],
                 reverse: false,
             }
         } else {
@@ -455,7 +460,12 @@ impl App {
                     },
                 );
                 ui.separator();
-                let start_enabled = !running
+                ui.selectable_value(&mut self.workspace, crate::music::SyncMode::Video, "Video");
+                ui.selectable_value(&mut self.workspace, crate::music::SyncMode::Music, "Music");
+                ui.separator();
+                let other_workspace =
+                    running && snapshot.mode.is_some_and(|mode| mode != self.workspace);
+                let start_enabled = (!running || other_workspace)
                     && !self.busy
                     && self.ha_picker.is_none()
                     && self.layout_dialog.is_none()
@@ -463,7 +473,11 @@ impl App {
                     && !self.config.lights.is_empty();
                 let start = ui.add_enabled(
                     start_enabled,
-                    egui::Button::new(if snapshot.state == SessionState::Paused {
+                    egui::Button::new(if self.workspace == crate::music::SyncMode::Music {
+                        "Start music"
+                    } else if other_workspace {
+                        "Start video"
+                    } else if snapshot.state == SessionState::Paused {
                         "Resume"
                     } else {
                         "Start sync"
@@ -471,6 +485,7 @@ impl App {
                     .fill(Color32::from_rgb(35, 89, 118)),
                 );
                 if start.clicked() {
+                    self.config.mode = self.workspace;
                     self.send(Command::Start(self.config.clone()));
                     running = true;
                 }
@@ -605,6 +620,30 @@ impl App {
                     "{} frames · {:.2} ms sampling · {:?}",
                     snapshot.frames, snapshot.processing_ms, snapshot.state
                 ));
+                if snapshot.mode == Some(crate::music::SyncMode::Video)
+                    && self.config.dark_zones.enabled
+                {
+                    ui.small(format!(
+                        "Dark zones: {}/{}",
+                        snapshot.dark_zones,
+                        snapshot.colors.iter().map(Vec::len).sum::<usize>()
+                    ));
+                }
+                if let Some(index) = self.selected
+                    && let Some(zones) = snapshot.colors.get(index)
+                    && let Some(color) = zones.first()
+                {
+                    ui.small(format!("Selected light · zone 1 output RGB {color:?}"));
+                    if let Some(sample) = snapshot
+                        .sampled_colors
+                        .get(index)
+                        .and_then(|zones| zones.first())
+                    {
+                        ui.small(format!(
+                            "Accurate sample RGB {sample:?} · before smoothing / brightness"
+                        ));
+                    }
+                }
             }
             ui.label(
                 egui::RichText::new("Minimize to keep syncing · close the window to stop")
@@ -659,7 +698,11 @@ impl App {
                     .inner_margin(16),
             )
             .show(ctx, |ui| {
-                self.canvas(ui);
+                if self.workspace == crate::music::SyncMode::Music {
+                    self.music_canvas(ui, &snapshot);
+                } else {
+                    self.canvas(ui);
+                }
             });
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S))
             && self.config.validate().is_ok()
@@ -677,7 +720,8 @@ impl App {
                 {
                     self.undo(input.modifiers.shift);
                 }
-                if !input.modifiers.command
+                if self.workspace == crate::music::SyncMode::Video
+                    && !input.modifiers.command
                     && let Some(index) = self.selected
                     && let Some(light) = self.config.lights.get_mut(index)
                 {
@@ -738,6 +782,7 @@ impl App {
                             .into();
                 } else {
                     self.config = config;
+                    self.workspace = self.config.mode;
                     self.selected = (!self.config.lights.is_empty()).then_some(0);
                     self.selected_point = 0;
                     self.drag = None;
@@ -751,7 +796,11 @@ impl App {
             &before,
             ctx.input(|i| i.pointer.any_down()) || ctx.wants_keyboard_input(),
         );
-        if before != self.config && running && self.config.validate().is_ok() {
+        if before != self.config
+            && before.mode == self.config.mode
+            && running
+            && self.config.validate().is_ok()
+        {
             self.pending_apply = Some(self.config.clone());
         }
         if !running {
@@ -819,6 +868,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut app = App::new(None, false).unwrap();
         app.config = Config::default();
+        app.workspace = app.config.mode;
         app.saved_config = app.config.clone();
         app.config_path = directory.path().join("config.json");
         app.notice.clear();
@@ -826,6 +876,185 @@ mod tests {
         // temporary directory. No native window or capture is constructed.
         app.smoke = Some((Instant::now(), Duration::from_secs(3600)));
         (app, directory)
+    }
+
+    #[test]
+    fn advanced_music_controls_are_conditional_saved_and_undoable() {
+        let (mut app, _directory) = headless_app();
+        app.workspace = crate::music::SyncMode::Music;
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 1200.0);
+        let visible = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().any(
+                |s| matches!(&s.shape, egui::epaint::Shape::Text(t) if t.galley.text() == label),
+            )
+        };
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert!(visible(&output, "Subbass weight"));
+        assert!(visible(&output, "Sparkle amount"));
+        let before = app.config.clone();
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Follow beat").center(),
+        );
+        assert!(!app.config.music.follow_beat);
+        app.undo(false);
+        assert_eq!(app.config, before);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        click(&mut app, &ctx, size, text_rect(&output, "Classic").center());
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert!(!visible(&output, "Subbass weight"));
+        assert!(!visible(&output, "Follow beat"));
+        app.save();
+        let saved: Config =
+            serde_json::from_slice(&std::fs::read(&app.config_path).unwrap()).unwrap();
+        assert_eq!(saved, app.config);
+    }
+
+    #[test]
+    fn dark_controls_are_conditional_saved_and_undoable() {
+        let (mut app, _directory) = headless_app();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 900.0);
+        let has = |out: &egui::FullOutput, label: &str| {
+            out.shapes.iter().any(
+                |s| matches!(&s.shape, egui::epaint::Shape::Text(t) if t.galley.text() == label),
+            )
+        };
+        let before = app.config.clone();
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert!(!has(&output, "Black sensitivity"));
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Turn off dark zones").center(),
+        );
+        assert!(app.config.dark_zones.enabled);
+        let enabled = app.config.clone();
+        app.undo(false);
+        assert_eq!(app.config, before);
+        app.undo(true);
+        assert_eq!(app.config, enabled);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let rect = text_rect(&output, "Black sensitivity");
+        click(
+            &mut app,
+            &ctx,
+            size,
+            Pos2::new(rect.left() - 60.0, rect.center().y),
+        );
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        assert_ne!(app.config.dark_zones.threshold, 8);
+        app.save();
+        let saved: Config =
+            serde_json::from_slice(&std::fs::read(&app.config_path).unwrap()).unwrap();
+        assert_eq!(saved, app.config);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Turn off dark zones").center(),
+        );
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert!(!has(&output, "Black sensitivity"));
+    }
+
+    #[test]
+    fn music_navigation_keeps_video_running_and_music_edits_preserve_video_layout() {
+        let (mut app, _directory) = headless_app();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 900.0);
+        app.send(Command::Start(app.config.clone()));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while app.engine.as_ref().unwrap().snapshots.borrow().state != SessionState::Running {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let geometry = app.config.lights.clone();
+        let video = (
+            app.config.source.clone(),
+            app.config.brightness,
+            app.config.smoothing_ms,
+            app.config.soft_ambience,
+        );
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        click(&mut app, &ctx, size, text_rect(&output, "Music").center());
+        assert_eq!(app.workspace, crate::music::SyncMode::Music);
+        assert_eq!(app.config.mode, crate::music::SyncMode::Video);
+        assert_eq!(
+            app.engine.as_ref().unwrap().snapshots.borrow().mode,
+            Some(crate::music::SyncMode::Video)
+        );
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Demo pulses").center(),
+        );
+        let before = app.config.music.sensitivity;
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let slider = text_rect(&output, "Sensitivity");
+        click(
+            &mut app,
+            &ctx,
+            size,
+            Pos2::new(slider.left() - 70.0, slider.center().y),
+        );
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        assert_ne!(before, app.config.music.sensitivity);
+        assert_eq!(app.config.lights, geometry);
+        assert_eq!(
+            (
+                app.config.source.clone(),
+                app.config.brightness,
+                app.config.smoothing_ms,
+                app.config.soft_ambience
+            ),
+            video
+        );
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Start music").center(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while app
+            .engine
+            .as_ref()
+            .unwrap()
+            .snapshots
+            .borrow()
+            .music
+            .is_none()
+        {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            app.engine.as_ref().unwrap().snapshots.borrow().mode,
+            Some(crate::music::SyncMode::Music)
+        );
+        assert_eq!(app.config.lights, geometry);
+        app.send(Command::Stop);
     }
     fn draw(
         app: &mut App,
@@ -994,6 +1223,75 @@ mod tests {
     }
 
     #[test]
+    fn black_bar_checkbox_changes_setting_in_both_directions() {
+        let (mut app, _directory) = headless_app();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 700.0);
+        for expected in [true, false] {
+            let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+            let checkbox = text_rect(&output, "Black bar detection");
+            click(&mut app, &ctx, size, checkbox.center());
+            assert_eq!(app.config.black_bar_detection, expected);
+        }
+    }
+
+    #[test]
+    fn soft_ambience_controls_are_conditional_and_undoable() {
+        let (mut app, _directory) = headless_app();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 900.0);
+        let contains = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == label)
+        })
+        };
+        let before = app.config.clone();
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert!(!contains(&output, "Ambience strength"));
+        let checkbox = text_rect(&output, "Soft ambience");
+        click(&mut app, &ctx, size, checkbox.center());
+        assert!(app.config.soft_ambience.enabled);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        for label in ["Ambience strength", "Color emphasis", "Vibrancy"] {
+            assert!(contains(&output, label));
+        }
+        let enabled = app.config.clone();
+        app.undo(false);
+        assert_eq!(app.config, before);
+        app.undo(true);
+        assert_eq!(app.config, enabled);
+        // Move each slider with a focused keyboard interaction, as egui users can.
+        for label in ["Ambience strength", "Color emphasis", "Vibrancy"] {
+            let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+            let rect = text_rect(&output, label);
+            let old = app.config.soft_ambience;
+            click(
+                &mut app,
+                &ctx,
+                size,
+                Pos2::new(rect.left() - 70.0, rect.center().y),
+            );
+            draw(
+                &mut app,
+                &ctx,
+                size,
+                vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+                egui::Modifiers::NONE,
+            );
+            assert_ne!(
+                app.config.soft_ambience, old,
+                "{label} did not edit its value"
+            );
+        }
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let checkbox = text_rect(&output, "Soft ambience");
+        click(&mut app, &ctx, size, checkbox.center());
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert!(!app.config.soft_ambience.enabled);
+        assert!(!contains(&output, "Vibrancy"));
+    }
+
+    #[test]
     fn headless_drag_is_one_undo_transaction() {
         let (mut app, _directory) = headless_app();
         app.config.lights[0].shape = Shape::Bulb {
@@ -1115,6 +1413,7 @@ mod tests {
         app.config.lights[0].shape = Shape::Strip {
             points: vec![Point { x: 0.1, y: 0.6 }, Point { x: 0.8, y: 0.4 }],
             radius: 0.23,
+            segment_leds: vec![],
             reverse: true,
         };
         app.selected_point = 1;
@@ -1146,13 +1445,82 @@ mod tests {
         assert_eq!(light.route, original.lights[0].route);
         assert_eq!(light.zones, original.lights[0].zones);
         assert!(
-            matches!(&light.shape, Shape::Strip { radius, reverse: true, points }
+            matches!(&light.shape, Shape::Strip { radius, reverse: true, points, .. }
             if *radius == 0.23 && points.len() == 5 && points.first() == points.last())
         );
         assert!(app.config.validate().is_ok());
         app.undo(false);
         assert_eq!(app.config, original);
         assert!(!app.history.can_undo());
+    }
+
+    #[test]
+    fn segment_count_controls_update_wled_total_and_undo_as_one_edit() {
+        let (mut app, _directory) = headless_app();
+        app.selected = Some(0);
+        if let Shape::Strip { points, .. } = &mut app.config.lights[0].shape {
+            *points =
+                crate::editor::strip_preset_points(crate::editor::StripPreset::Perimeter, 0.04);
+        }
+        app.config.lights[0].route = Route::Wled {
+            host: "desk.local".into(),
+            start: 5,
+            count: 127,
+            device_id: "abcdef".into(),
+        };
+        let original = app.config.clone();
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1080.0, 1100.0);
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        let output = click(
+            &mut app,
+            &ctx,
+            size,
+            text_rect(&output, "Set LEDs per segment").center(),
+        );
+        assert!(
+            matches!(&app.config.lights[0].shape, Shape::Strip { segment_leds, .. } if segment_leds == &[32, 32, 32, 31])
+        );
+        for label in [
+            "Left · 1 → 2",
+            "Top · 2 → 3",
+            "Right · 3 → 4",
+            "Bottom · 4 → 5",
+            "Total: 127 LEDs",
+        ] {
+            text_rect(&output, label);
+        }
+        let enabled = app.config.clone();
+        click(&mut app, &ctx, size, text_rect(&output, "32 LEDs").center());
+        draw(
+            &mut app,
+            &ctx,
+            size,
+            vec![
+                key(egui::Key::A, egui::Modifiers::CTRL),
+                egui::Event::Text("24".into()),
+                key(egui::Key::Enter, egui::Modifiers::NONE),
+            ],
+            egui::Modifiers::NONE,
+        );
+        draw(&mut app, &ctx, size, vec![], egui::Modifiers::NONE);
+        assert!(
+            matches!(&app.config.lights[0].shape, Shape::Strip { segment_leds, .. } if segment_leds == &[24, 32, 32, 31])
+        );
+        assert!(matches!(
+            &app.config.lights[0].route,
+            Route::Wled {
+                start: 5,
+                count: 119,
+                ..
+            }
+        ));
+        app.config.validate().unwrap();
+        app.undo(false);
+        assert_eq!(app.config, enabled);
+        app.undo(false);
+        assert_eq!(app.config, original);
     }
 
     #[test]

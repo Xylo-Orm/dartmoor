@@ -33,6 +33,10 @@ pub struct Snapshot {
     pub frames: u64,
     pub processing_ms: f64,
     pub devices: Vec<(String, String)>,
+    pub mode: Option<crate::music::SyncMode>,
+    pub dark_zones: usize,
+    pub sampled_colors: Vec<Vec<[u8; 3]>>,
+    pub music: Option<crate::music::Telemetry>,
 }
 impl Default for Snapshot {
     fn default() -> Self {
@@ -44,6 +48,10 @@ impl Default for Snapshot {
             frames: 0,
             processing_ms: 0.0,
             devices: vec![],
+            mode: None,
+            dark_zones: 0,
+            sampled_colors: vec![],
+            music: None,
         }
     }
 }
@@ -102,6 +110,9 @@ struct Processed {
     frames: u64,
     ms: f64,
     produced: Instant,
+    dark_zones: usize,
+    sampled_colors: Vec<Vec<[u8; 3]>>,
+    music: Option<crate::music::Telemetry>,
 }
 enum Event {
     Failed(u64, String),
@@ -278,8 +289,8 @@ fn route_colors(p: &Processed) -> (BTreeMap<String, RgbFrame>, HaColors) {
                     .entry(core::canonical_device_id(device_id))
                     .or_default();
                 buf.resize(buf.len().max(start + count), [0; 3]);
-                for i in 0..*count {
-                    buf[start + i] = colors[i * colors.len() / count];
+                for (i, zone) in core::led_zone_indices(l, *count).into_iter().enumerate() {
+                    buf[start + i] = colors[zone];
                 }
             }
             Route::HomeAssistant { entity_id } => ha.push((entity_id.clone(), colors[0])),
@@ -343,6 +354,9 @@ fn process_capture(
     let mut source = CaptureGuard(opener(&active.source, active.fps)?);
     let mut plan = None;
     let mut dimensions = (0, 0);
+    let mut black_bars = crate::black_bars::Detector::default();
+    let mut darkness = crate::dark_zones::Detector::default();
+    let mut crop_bounds = None;
     let mut previous = vec![];
     let mut count = 0;
     let mut last_sample = Instant::now();
@@ -355,6 +369,12 @@ fn process_capture(
             if !same_geometry(&active, &updated) {
                 plan = None;
                 previous.clear();
+                darkness.reset();
+            }
+            if active.black_bar_detection != updated.black_bar_detection
+                || active.dark_zones != updated.dark_zones
+            {
+                darkness.reset();
             }
             active = updated;
         }
@@ -367,9 +387,16 @@ fn process_capture(
         else {
             continue;
         };
+        let frame = black_bars.apply(frame, active.black_bar_detection, processing_started);
+        let bounds = black_bars.crop_bounds();
+        if crop_bounds != Some(bounds) {
+            darkness.reset();
+            crop_bounds = Some(bounds);
+        }
         if dimensions != (frame.width, frame.height) {
             dimensions = (frame.width, frame.height);
             plan = None;
+            darkness.reset();
         }
         if plan.is_none() {
             plan = Some(SamplingPlan::compile(
@@ -378,13 +405,47 @@ fn process_capture(
                 dimensions.1,
             )?);
         }
-        let target = plan.as_ref().unwrap().sample(&frame);
+        let plan = plan.as_ref().unwrap();
+        let (target, accurate) = if active.dark_zones.enabled {
+            let accurate = plan.sample(&frame);
+            (
+                plan.enhance_accurate(&frame, active.soft_ambience, accurate.clone()),
+                Some(accurate),
+            )
+        } else {
+            (
+                plan.sample_with_ambience(&frame, active.soft_ambience),
+                None,
+            )
+        };
         core::smooth(
             &mut previous,
             &target,
             last_sample.elapsed(),
             active.smoothing_ms,
         );
+        let sampled_colors = accurate
+            .as_ref()
+            .map(|colors| {
+                colors
+                    .iter()
+                    .map(|zones| {
+                        zones
+                            .iter()
+                            .map(|color| core::encode(*color, 1.0))
+                            .collect()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let dark_zones = accurate.as_ref().map_or(0, |accurate| {
+            darkness.apply(
+                accurate,
+                &mut previous,
+                active.dark_zones,
+                processing_started,
+            )
+        });
         last_sample = Instant::now();
         let colors = previous
             .iter()
@@ -405,6 +466,9 @@ fn process_capture(
             frames: count,
             ms,
             produced: processing_started,
+            dark_zones,
+            sampled_colors,
+            music: None,
         })));
         next += interval;
         let now = Instant::now();
@@ -425,6 +489,99 @@ fn process_capture(
     Ok(())
 }
 
+fn process_music(
+    mut config: watch::Receiver<Arc<Config>>,
+    stop: &AtomicBool,
+    frames: watch::Sender<Option<Arc<Processed>>>,
+    session: u64,
+    mut source: Box<dyn crate::music::AudioSource>,
+) -> anyhow::Result<()> {
+    let mut analyzer = crate::music::Analyzer::default();
+    let mut count = 0;
+    let mut last_audio = Instant::now();
+    let mut last_tick = last_audio;
+    let mut next_output = last_audio;
+    let interval = Duration::from_secs_f64(1.0 / 30.0);
+    let mut analysis_ms = 0.0;
+    let empty = Arc::new(Frame {
+        width: 1,
+        height: 1,
+        pixels: vec![[0; 3]],
+    });
+    while !stop.load(Ordering::Relaxed) {
+        let poll_started = Instant::now();
+        let active = config.borrow_and_update().clone();
+        let samples = source.next_samples(Duration::from_millis(10))?;
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let now = Instant::now();
+        if source.take_discontinuity() {
+            analyzer.discontinuity();
+        }
+        analyzer.feed(&[], &active.music);
+        if let Some(samples) = samples {
+            anyhow::ensure!(
+                samples.len() <= crate::music::MAX_SAMPLES
+                    && samples.len().is_multiple_of(crate::music::CHANNELS),
+                "invalid audio sample block"
+            );
+            // An empty block is an explicit negotiated idle, not a timeout.
+            last_audio = now;
+            if samples.is_empty() {
+                analyzer.idle(now.duration_since(last_tick), &active.music);
+            } else {
+                analyzer.feed(&samples, &active.music);
+            }
+        } else if now.duration_since(last_audio) >= Duration::from_millis(100) {
+            // Ordinary delivery jitter must not reset the spectral windows.
+            analyzer.idle(now.duration_since(last_tick), &active.music);
+        }
+        anyhow::ensure!(
+            now.duration_since(last_audio) <= Duration::from_secs(2),
+            "Playback capture stopped delivering audio. Start again to reconnect."
+        );
+        last_tick = now;
+        analysis_ms += now.elapsed().as_secs_f64() * 1000.0;
+        if now >= next_output {
+            let rendered = Instant::now();
+            let colors = active
+                .lights
+                .iter()
+                .map(|light| analyzer.light_colors(light, &active.music))
+                .collect();
+            count += 1;
+            let processed = Processed {
+                session,
+                config: active,
+                frame: empty.clone(),
+                colors,
+                frames: count,
+                ms: analysis_ms + rendered.elapsed().as_secs_f64() * 1000.0,
+                produced: last_audio,
+                dark_zones: 0,
+                sampled_colors: vec![],
+                music: Some(analyzer.telemetry()),
+            };
+            frames.send_replace(Some(Arc::new(processed)));
+            analysis_ms = 0.0;
+            next_output += interval;
+            if next_output <= now {
+                next_output = now + interval;
+            }
+        }
+        let deadline = poll_started + Duration::from_millis(10);
+        while !stop.load(Ordering::Relaxed) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            thread::park_timeout(remaining);
+        }
+    }
+    Ok(())
+}
+
 fn worker(
     c: Arc<Config>,
     frames: watch::Sender<Option<Arc<Processed>>>,
@@ -438,7 +595,13 @@ fn worker(
     let (config, receiver) = watch::channel(c);
     let thread = spawner(Box::new(move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            process_capture(receiver, &stop_rx, frames, session, opener)
+            let active = receiver.borrow().clone();
+            if active.mode == crate::music::SyncMode::Music {
+                let source = crate::music::open(&active.music)?;
+                process_music(receiver, &stop_rx, frames, session, source)
+            } else {
+                process_capture(receiver, &stop_rx, frames, session, opener)
+            }
         }));
         let error = match result {
             Ok(Ok(())) => None,
@@ -464,7 +627,10 @@ fn same_geometry(a: &Config, b: &Config) -> bool {
             .all(|(a, b)| a.id == b.id && a.shape == b.shape && a.zones == b.zones)
 }
 fn same_routes(a: &Config, b: &Config) -> bool {
-    a.restore_wled_state == b.restore_wled_state
+    a.mode == b.mode
+        && (a.mode != crate::music::SyncMode::Music
+            || (a.music.input == b.music.input && a.music.device == b.music.device))
+        && a.restore_wled_state == b.restore_wled_state
         && a.source == b.source
         && a.fps == b.fps
         && a.ha_url == b.ha_url
@@ -520,6 +686,30 @@ async fn run_with_spawner(
                 let shutdown = matches!(cmd, Some(Command::Shutdown) | None);
                 match cmd {
                     Some(Command::Start(c)) => {
+                        // Explicit Start in the other workspace transfers ownership;
+                        // navigating tabs never sends this command.
+                        if active
+                            .as_ref()
+                            .is_some_and(|current| current.mode != c.mode)
+                            && c.validate().is_ok()
+                        {
+                            if let Some(w) = worker_state.take() {
+                                retired.push(w.stop());
+                            }
+                            if let Some(o) = outputs.take() {
+                                status.devices = o.shutdown().await;
+                            }
+                            active = None;
+                            frames_tx.send_replace(None);
+                            let deadline = Instant::now() + Duration::from_millis(500);
+                            while retired.iter().any(|t| !t.is_finished())
+                                && Instant::now() < deadline
+                            {
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                            }
+                            status.state = SessionState::Idle;
+                            status.mode = None;
+                        }
                         retired.retain(|t| !t.is_finished());
                         if worker_state.is_some() || !retired.is_empty() {
                             status.message="Capture is still active or awaiting a portal response. Stop / cancel that dialog first.".into();
@@ -532,9 +722,16 @@ async fn run_with_spawner(
                             status.preview = None;
                             status.frames = 0;
                             status.colors.clear();
+                            status.music = None;
+                            status.dark_zones = 0;
+                            status.sampled_colors.clear();
+                            status.mode = Some(c.mode);
                             status.state = SessionState::RequestingPermission;
-                            status.message =
-                                "Waiting for screen capture permission / first frame".into();
+                            status.message = if c.mode == crate::music::SyncMode::Music {
+                                "Connecting to playback audio / first samples".into()
+                            } else {
+                                "Waiting for screen capture permission / first frame".into()
+                            };
                             session += 1;
                             match worker(
                                 c.clone(),
@@ -580,6 +777,7 @@ async fn run_with_spawner(
                             status.devices = o.shutdown().await;
                         }
                         active = None;
+                        status.mode = None;
                         frames_tx.send_replace(None);
                         status.state = if matches!(cmd, Some(Command::Pause)) {
                             SessionState::Paused
@@ -604,13 +802,24 @@ async fn run_with_spawner(
                         o.publish(&p);
                     }
                     status.state = SessionState::Running;
-                    status.message =
-                        if matches!(p.config.source, crate::config::CaptureSelection::Synthetic) {
-                            "SIMULATED desktop — no capture hardware verification".into()
+                    status.message = if p.config.mode == crate::music::SyncMode::Music {
+                        if p.config.music.input == crate::music::AudioInput::Demo {
+                            "SIMULATED music pulses — no audio captured".into()
                         } else {
-                            "Synchronizing SDR/sRGB desktop".into()
-                        };
-                    status.preview = Some(p.frame.clone());
+                            "Music · Pulse · system playback".into()
+                        }
+                    } else if matches!(p.config.source, crate::config::CaptureSelection::Synthetic)
+                    {
+                        "SIMULATED desktop — no capture hardware verification".into()
+                    } else {
+                        "Synchronizing SDR/sRGB desktop".into()
+                    };
+                    status.mode = Some(p.config.mode);
+                    status.preview =
+                        (p.config.mode == crate::music::SyncMode::Video).then(|| p.frame.clone());
+                    status.dark_zones = p.dark_zones;
+                    status.sampled_colors = p.sampled_colors.clone();
+                    status.music = p.music;
                     status.colors = p.colors.clone();
                     status.frames = p.frames;
                     status.processing_ms = p.ms;
@@ -629,6 +838,9 @@ async fn run_with_spawner(
                 }
                 active = None;
                 status.state = SessionState::Error;
+                status.mode = None;
+                status.music = None;
+                status.preview = None;
                 status.message = message;
                 snapshots.send_replace(status.clone());
             }
@@ -657,12 +869,495 @@ async fn run_with_spawner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct SplitDarkPicture;
+    impl capture::CaptureSource for SplitDarkPicture {
+        fn next_frame(&mut self, _: Duration) -> anyhow::Result<Option<Frame>> {
+            Ok(Some(Frame {
+                width: 160,
+                height: 90,
+                pixels: (0..160 * 90)
+                    .map(|i| {
+                        if !(10..80).contains(&(i / 160)) {
+                            [0; 3]
+                        } else if i % 160 < 80 {
+                            [10; 3]
+                        } else {
+                            [0, 0, 255]
+                        }
+                    })
+                    .collect(),
+            }))
+        }
+        fn stop(&mut self) {}
+    }
+
+    #[tokio::test]
+    async fn live_dark_settings_crop_and_smoothing_keep_independent_zones_off() {
+        let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = opens.clone();
+        let factory: CaptureFactory = Arc::new(move |_, _| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(SplitDarkPicture))
+        });
+        let (commands, rx) = mpsc::channel(8);
+        let (snapshots, mut state) = watch::channel(Snapshot::default());
+        let task = tokio::spawn(run_with_factory(rx, snapshots, factory));
+        let mut config = Config {
+            black_bar_detection: true,
+            brightness: 1.0,
+            smoothing_ms: 5000.0,
+            ..Default::default()
+        };
+        config.soft_ambience.enabled = true;
+        config.lights[0].zones = 1;
+        config.lights[0].shape = core::Shape::Bulb {
+            center: core::Point { x: 0.25, y: 0.5 },
+            radius: 0.02,
+        };
+        let mut second = config.lights[0].clone();
+        second.id = "blue-zone".into();
+        second.shape = core::Shape::Bulb {
+            center: core::Point { x: 0.75, y: 0.5 },
+            radius: 0.02,
+        };
+        config.lights.push(second);
+        commands.send(Command::Start(config.clone())).await.unwrap();
+        for (enabled, threshold, expected_off) in [
+            (false, 8, false),
+            (true, 8, false),
+            (true, 12, true),
+            (false, 12, false),
+            (true, 12, true),
+            (true, 0, false),
+        ] {
+            config.dark_zones = crate::dark_zones::DarkZones { enabled, threshold };
+            commands.send(Command::Apply(config.clone())).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    state.changed().await.unwrap();
+                    let snapshot = state.borrow_and_update();
+                    if snapshot
+                        .preview
+                        .as_ref()
+                        .is_none_or(|frame| frame.height != 70)
+                    {
+                        continue;
+                    }
+                    if snapshot.colors.len() != 2
+                        || snapshot.dark_zones != usize::from(expected_off)
+                        || enabled != !snapshot.sampled_colors.is_empty()
+                    {
+                        continue;
+                    }
+                    let dark = snapshot.colors[0][0];
+                    if (dark == [0; 3]) != expected_off {
+                        continue;
+                    }
+                    assert_eq!(snapshot.colors[1][0], [0, 0, 255]);
+                    if enabled {
+                        assert_eq!(snapshot.sampled_colors[0][0], [10; 3]);
+                    }
+                    break;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(opens.load(Ordering::Relaxed), 1);
+        commands.send(Command::Shutdown).await.unwrap();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn music_demo_updates_live_and_explicit_workspace_handover_closes_video() {
+        struct Tracked {
+            stops: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl capture::CaptureSource for Tracked {
+            fn next_frame(&mut self, _: Duration) -> anyhow::Result<Option<Frame>> {
+                Ok(Some(solid_frame()))
+            }
+            fn stop(&mut self) {
+                self.stops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let stops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = stops.clone();
+        let factory: CaptureFactory = Arc::new(move |_, _| {
+            Ok(Box::new(Tracked {
+                stops: count.clone(),
+            }))
+        });
+        let (commands, rx) = mpsc::channel(8);
+        let (snapshots, mut state) = watch::channel(Snapshot::default());
+        let task = tokio::spawn(run_with_factory(rx, snapshots, factory));
+        let mut config = Config::default();
+        commands.send(Command::Start(config.clone())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                state.changed().await.unwrap();
+                if state.borrow().state == SessionState::Running {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        config.mode = crate::music::SyncMode::Music;
+        config.music.input = crate::music::AudioInput::Demo;
+        commands.send(Command::Start(config.clone())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                state.changed().await.unwrap();
+                let snapshot = state.borrow_and_update();
+                if snapshot.mode == Some(crate::music::SyncMode::Music)
+                    && snapshot.music.is_some()
+                    && snapshot
+                        .colors
+                        .iter()
+                        .flatten()
+                        .any(|color| *color != [0; 3])
+                {
+                    assert!(snapshot.preview.is_none());
+                    assert_eq!(snapshot.colors[0].len(), config.lights[0].zones);
+                    assert_eq!(stops.load(Ordering::Relaxed), 1);
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        for brightness in [0.0, 1.0] {
+            config.music.brightness = brightness;
+            commands.send(Command::Apply(config.clone())).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    state.changed().await.unwrap();
+                    let snapshot = state.borrow_and_update();
+                    if !snapshot.colors.is_empty()
+                        && snapshot.colors.iter().flatten().any(|c| *c != [0; 3])
+                            == (brightness > 0.0)
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(stops.load(Ordering::Relaxed), 1);
+        let frames_before = state.borrow().frames;
+        config.music.detector = crate::music::DetectorMode::Classic;
+        config.music.sparkle_amount = 0.0;
+        config.music.follow_beat = false;
+        commands.send(Command::Apply(config.clone())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                state.changed().await.unwrap();
+                let snapshot = state.borrow_and_update();
+                if snapshot.frames > frames_before + 2 {
+                    let audio = snapshot.music.unwrap();
+                    assert_eq!(audio.sparkle_onsets, 0);
+                    assert!(audio.bpm.is_none());
+                    assert!(
+                        snapshot.colors[0]
+                            .iter()
+                            .all(|c| *c == snapshot.colors[0][0])
+                    );
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(stops.load(Ordering::Relaxed), 1);
+        config.mode = crate::music::SyncMode::Video;
+        commands.send(Command::Start(config)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                state.changed().await.unwrap();
+                if state.borrow().preview.is_some() {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(state.borrow().music.is_none());
+        commands.send(Command::Shutdown).await.unwrap();
+        task.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while stops.load(Ordering::Relaxed) != 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn music_source_changes_require_restart_but_effect_controls_do_not() {
+        let mut a = Config {
+            mode: crate::music::SyncMode::Music,
+            ..Default::default()
+        };
+        let mut b = a.clone();
+        b.music.sensitivity = 0.8;
+        b.music.attack_ms = 50.0;
+        b.music.color = [255, 10, 20];
+        b.music.detector = crate::music::DetectorMode::Classic;
+        b.music.subbass_weight = 0.8;
+        b.music.sparkle_amount = 0.9;
+        b.music.follow_beat = false;
+        assert!(same_routes(&a, &b));
+        b.music.input = crate::music::AudioInput::Demo;
+        assert!(!same_routes(&a, &b));
+        a.music.input = b.music.input;
+        b.music.device = "other-sink".into();
+        assert!(!same_routes(&a, &b));
+    }
+
+    #[test]
+    fn music_worker_rejects_stale_audio_and_drops_its_source() {
+        struct SilentTimeouts(Arc<AtomicBool>);
+        impl crate::music::AudioSource for SilentTimeouts {
+            fn next_samples(&mut self, _: Duration) -> anyhow::Result<Option<Vec<f32>>> {
+                Ok(None)
+            }
+        }
+        impl Drop for SilentTimeouts {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (_, config) = watch::channel(Arc::new(Config {
+            mode: crate::music::SyncMode::Music,
+            ..Default::default()
+        }));
+        let (frames, output) = watch::channel(None);
+        let result = process_music(
+            config,
+            &AtomicBool::new(false),
+            frames,
+            77,
+            Box::new(SilentTimeouts(dropped.clone())),
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("stopped delivering audio")
+        );
+        assert!(dropped.load(Ordering::Relaxed));
+        let output = output.borrow().clone().unwrap();
+        assert_eq!(output.session, 77);
+        assert!(
+            output.produced.elapsed() >= Duration::from_secs(2),
+            "timeouts must not refresh output freshness"
+        );
+        assert!(output.colors.iter().flatten().all(|color| *color == [0; 3]));
+    }
     fn solid_frame() -> Frame {
         Frame {
             width: 2,
             height: 2,
             pixels: vec![[255, 0, 0]; 4],
         }
+    }
+
+    struct Letterboxed;
+    impl capture::CaptureSource for Letterboxed {
+        fn next_frame(&mut self, _: Duration) -> anyhow::Result<Option<Frame>> {
+            Ok(Some(Frame {
+                width: 160,
+                height: 90,
+                pixels: (0..160 * 90)
+                    .map(|i| {
+                        if (10..80).contains(&(i / 160)) {
+                            [255, 0, 0]
+                        } else {
+                            [0; 3]
+                        }
+                    })
+                    .collect(),
+            }))
+        }
+        fn stop(&mut self) {}
+    }
+
+    #[tokio::test]
+    async fn live_black_bar_toggle_remaps_sampling_and_preview_together() {
+        let factory: CaptureFactory = Arc::new(|_, _| Ok(Box::new(Letterboxed)));
+        let (commands, rx) = mpsc::channel(8);
+        let (snapshots, mut state) = watch::channel(Snapshot::default());
+        let task = tokio::spawn(run_with_factory(rx, snapshots, factory));
+        let mut config = Config {
+            black_bar_detection: true,
+            brightness: 1.0,
+            smoothing_ms: 0.0,
+            ..Default::default()
+        };
+        config.lights[0].zones = 1;
+        config.lights[0].shape = core::Shape::Bulb {
+            center: core::Point { x: 0.5, y: 0.03 },
+            radius: 0.01,
+        };
+        commands.send(Command::Start(config.clone())).await.unwrap();
+        for enabled in [true, false, true] {
+            config.black_bar_detection = enabled;
+            commands.send(Command::Apply(config.clone())).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    state.changed().await.unwrap();
+                    let snapshot = state.borrow_and_update();
+                    let height = if enabled { 70 } else { 90 };
+                    let color = if enabled { [255, 0, 0] } else { [0; 3] };
+                    if snapshot
+                        .preview
+                        .as_ref()
+                        .is_some_and(|frame| frame.height == height)
+                        && snapshot.colors == vec![vec![color]]
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        }
+        commands.send(Command::Shutdown).await.unwrap();
+        task.await.unwrap();
+    }
+
+    struct AmbiencePicture;
+    impl capture::CaptureSource for AmbiencePicture {
+        fn next_frame(&mut self, _: Duration) -> anyhow::Result<Option<Frame>> {
+            Ok(Some(Frame {
+                width: 160,
+                height: 90,
+                pixels: (0..160 * 90)
+                    .map(|i| {
+                        if !(10..80).contains(&(i / 160)) {
+                            [0; 3]
+                        } else if i % 160 < 48 {
+                            [240, 30, 20]
+                        } else {
+                            [150; 3]
+                        }
+                    })
+                    .collect(),
+            }))
+        }
+        fn stop(&mut self) {}
+    }
+
+    #[tokio::test]
+    async fn live_ambience_updates_use_cropped_picture_without_reopening_capture() {
+        let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = opens.clone();
+        let factory: CaptureFactory = Arc::new(move |_, _| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(AmbiencePicture))
+        });
+        let (commands, rx) = mpsc::channel(8);
+        let (snapshots, mut state) = watch::channel(Snapshot::default());
+        let task = tokio::spawn(run_with_factory(rx, snapshots, factory));
+        let mut config = Config {
+            black_bar_detection: true,
+            brightness: 1.0,
+            smoothing_ms: 0.0,
+            ..Default::default()
+        };
+        config.lights[0].zones = 1;
+        config.lights[0].shape = core::Shape::Strip {
+            points: vec![
+                core::Point { x: 0.0, y: 0.5 },
+                core::Point { x: 1.0, y: 0.5 },
+            ],
+            radius: 1.0,
+            reverse: false,
+            segment_leds: vec![],
+        };
+        commands.send(Command::Start(config.clone())).await.unwrap();
+        let mut accurate = None;
+        let mut emphasized = None;
+        for settings in [
+            core::SoftAmbience::default(),
+            core::SoftAmbience {
+                enabled: true,
+                strength: 1.0,
+                color_emphasis: 0.0,
+                vibrancy: 0.0,
+            },
+            core::SoftAmbience {
+                enabled: true,
+                strength: 1.0,
+                color_emphasis: 1.0,
+                vibrancy: 0.0,
+            },
+            core::SoftAmbience {
+                enabled: true,
+                strength: 1.0,
+                color_emphasis: 1.0,
+                vibrancy: 1.0,
+            },
+            core::SoftAmbience {
+                enabled: true,
+                strength: 0.0,
+                color_emphasis: 1.0,
+                vibrancy: 1.0,
+            },
+            core::SoftAmbience::default(),
+        ] {
+            config.soft_ambience = settings;
+            commands.send(Command::Apply(config.clone())).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    state.changed().await.unwrap();
+                    let snapshot = state.borrow_and_update();
+                    let Some(frame) = &snapshot.preview else {
+                        continue;
+                    };
+                    if frame.height != 70 {
+                        continue;
+                    }
+                    let plan =
+                        SamplingPlan::compile(&config.lights, frame.width, frame.height).unwrap();
+                    let expected = plan.sample_with_ambience(frame, settings)[0][0];
+                    if snapshot.colors != vec![vec![core::encode(expected, 1.0)]] {
+                        continue;
+                    }
+                    let color = snapshot.colors[0][0];
+                    if settings.color_emphasis == 1.0 && settings.strength > 0.0 {
+                        if settings.vibrancy == 0.0 {
+                            emphasized = Some(color);
+                        } else {
+                            assert_ne!(
+                                Some(color),
+                                emphasized,
+                                "vibrancy did not affect live output"
+                            );
+                        }
+                        let baseline: [u8; 3] = accurate.unwrap();
+                        assert!(
+                            i16::from(color[0]) - i16::from(color[1])
+                                > i16::from(baseline[0]) - i16::from(baseline[1])
+                        );
+                    } else if let Some(baseline) = accurate {
+                        assert_eq!(color, baseline);
+                    } else {
+                        accurate = Some(color);
+                    }
+                    break;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(opens.load(Ordering::Relaxed), 1);
+        commands.send(Command::Shutdown).await.unwrap();
+        task.await.unwrap();
     }
 
     #[test]
@@ -957,6 +1652,9 @@ mod tests {
             frames: 1,
             ms: 0.0,
             produced: Instant::now(),
+            dark_zones: 0,
+            sampled_colors: vec![],
+            music: None,
         };
         let (frames, _) = route_colors(&processed);
         assert_eq!(frames.len(), 1);
@@ -964,6 +1662,67 @@ mod tests {
             frames["aabbccddeeff"],
             vec![[255, 0, 0], [255, 0, 0], [0, 0, 255], [0, 0, 255]]
         );
+    }
+
+    #[test]
+    fn routing_unequal_segments_keeps_physical_ranges_and_reverses_the_entire_strip() {
+        let mut config = Config::default();
+        config.lights[0].zones = 6;
+        config.lights[0].shape = core::Shape::Strip {
+            points: vec![
+                core::Point { x: 0.0, y: 0.0 },
+                core::Point { x: 1.0, y: 0.0 },
+                core::Point { x: 1.0, y: 1.0 },
+                core::Point { x: 0.0, y: 1.0 },
+            ],
+            radius: 0.04,
+            segment_leds: vec![2, 5, 3],
+            reverse: false,
+        };
+        config.lights[0].route = Route::Wled {
+            host: "desk.local".into(),
+            start: 3,
+            count: 10,
+            device_id: "abcdef".into(),
+        };
+        let colors: Vec<_> = (1..=6).map(|i| [i, 0, 0]).collect();
+        let expected: Vec<_> = [1, 1, 2, 2, 3, 3, 4, 5, 5, 6]
+            .into_iter()
+            .map(|i| [i, 0, 0])
+            .collect();
+        for reverse in [false, true] {
+            if let core::Shape::Strip {
+                reverse: direction, ..
+            } = &mut config.lights[0].shape
+            {
+                *direction = reverse;
+            }
+            config.validate().unwrap();
+            let processed = Processed {
+                session: 1,
+                config: Arc::new(config.clone()),
+                frame: Arc::new(capture::synthetic_frame(0.0)),
+                colors: vec![if reverse {
+                    colors.iter().rev().copied().collect()
+                } else {
+                    colors.clone()
+                }],
+                frames: 1,
+                ms: 0.0,
+                produced: Instant::now(),
+                dark_zones: 0,
+                sampled_colors: vec![],
+                music: None,
+            };
+            let (frames, _) = route_colors(&processed);
+            let mut physical = vec![[0; 3]; 3];
+            physical.extend(if reverse {
+                expected.iter().rev().copied().collect::<Vec<_>>()
+            } else {
+                expected.clone()
+            });
+            assert_eq!(frames["abcdef"], physical);
+        }
     }
     struct TrackedSource {
         stopped: Arc<AtomicBool>,
