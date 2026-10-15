@@ -1,0 +1,3 @@
+zigpy==2.3.0
+zigpy-znp==1.1.1
+serialx==1.13.0

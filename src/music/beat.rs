@@ -17,12 +17,15 @@ pub(super) struct Tracker {
     votes: u8,
     next: f64,
     last_main: f64,
+    last_support: f64,
     last_pulse: f64,
     last_hat: f64,
     confidence: f32,
     locked: bool,
     ever_locked: bool,
     misses: u8,
+    min_bpm: u16,
+    max_bpm: u16,
 }
 impl Default for Tracker {
     fn default() -> Self {
@@ -35,16 +38,31 @@ impl Default for Tracker {
             votes: 0,
             next: f64::INFINITY,
             last_main: f64::NEG_INFINITY,
+            last_support: f64::NEG_INFINITY,
             last_pulse: f64::NEG_INFINITY,
             last_hat: f64::NEG_INFINITY,
             confidence: 0.0,
             locked: false,
             ever_locked: false,
             misses: 0,
+            min_bpm: 60,
+            max_bpm: 200,
         }
     }
 }
 impl Tracker {
+    pub fn set_range(&mut self, min_bpm: u16, max_bpm: u16) {
+        if (self.min_bpm, self.max_bpm) != (min_bpm, max_bpm) {
+            self.min_bpm = min_bpm;
+            self.max_bpm = max_bpm;
+            self.reset();
+        }
+    }
+    pub fn nudge(&mut self, beats: f32) {
+        if self.locked {
+            self.next += f64::from(beats) * self.period;
+        }
+    }
     pub fn reset(&mut self) {
         self.events.clear();
         self.hats.clear();
@@ -53,6 +71,7 @@ impl Tracker {
         self.votes = 0;
         self.next = f64::INFINITY;
         self.last_main = f64::NEG_INFINITY;
+        self.last_support = f64::NEG_INFINITY;
         self.last_pulse = f64::NEG_INFINITY;
         self.last_hat = f64::NEG_INFINITY;
         self.estimate_at = 0.0;
@@ -93,7 +112,6 @@ impl Tracker {
                 weight: main.clamp(0.25, 1.0),
             });
             self.last_main = time;
-            self.misses = 0;
             if self.locked {
                 let previous = self.next - self.period;
                 let nearest = if (time - previous).abs() < (time - self.next).abs() {
@@ -103,10 +121,14 @@ impl Tracker {
                 };
                 let error = time - nearest;
                 if error.abs() < self.period * 0.18 {
+                    self.last_support = time;
+                    self.misses = 0;
                     self.next += error * 0.25;
                 } else {
                     self.confidence *= 0.85;
                 }
+            } else {
+                self.misses = 0;
             }
             self.last_pulse = time;
         }
@@ -127,7 +149,7 @@ impl Tracker {
             }
             return false;
         }
-        if time - self.last_main > (self.period * 2.0).min(1.5) {
+        if self.locked && time - self.last_support > (self.period * 2.0).min(1.5) {
             self.confidence *= 0.96;
             self.locked = false;
             self.next = f64::INFINITY;
@@ -178,34 +200,57 @@ impl Tracker {
         }
         score
     }
+    fn candidate_score(&self, period: f64) -> (f32, f64) {
+        let latest = self.events.back().unwrap().time;
+        let mut best = (self.score(period, latest), latest);
+        for event in self.events.iter().rev().skip(1).take(2) {
+            let score = self.score(period, event.time);
+            if score > best.0 + 0.04 {
+                best = (score, event.time);
+            }
+        }
+        best
+    }
     fn estimate(&mut self, time: f64) {
         if self.events.len() < 5 {
             return;
         }
-        let anchor = self.events.back().unwrap().time;
-        let span = anchor - self.events.front().unwrap().time;
-        if span < 2.0 || time - anchor > self.period * 2.0 {
+        let latest = self.events.back().unwrap().time;
+        let span = latest - self.events.front().unwrap().time;
+        if span < 2.0 || time - latest > self.period * 2.0 {
             return;
         }
-        let mut best = (0.0f32, self.period);
+        let mut best = (0.0f32, self.period, latest);
         let mut runner = 0.0f32;
-        for bpm in 60..=200 {
+        for bpm in self.min_bpm..=self.max_bpm {
             let period = 60.0 / f64::from(bpm);
-            let raw = self.score(period, anchor);
+            let (raw, anchor) = self.candidate_score(period);
             let continuity = if self.locked && (period / self.period - 1.0).abs() < 0.04 {
                 0.03
             } else {
                 0.0
             };
             if raw + continuity > best.0 {
-                best = (raw + continuity, period);
+                best = (raw + continuity, period, anchor);
+            }
+        }
+        // Refine a coarse integer-BPM winner without widening the search.
+        for offset in [-0.5, -0.25, 0.25, 0.5] {
+            let bpm = 60.0 / best.1 + offset;
+            if bpm < f64::from(self.min_bpm) || bpm > f64::from(self.max_bpm) {
+                continue;
+            }
+            let period = 60.0 / bpm;
+            let (raw, anchor) = self.candidate_score(period);
+            if raw > best.0 {
+                best = (raw, period, anchor);
             }
         }
         // Nearby BPMs form one candidate; ambiguity means a different tempo.
-        for bpm in 60..=200 {
+        for bpm in self.min_bpm..=self.max_bpm {
             let period = 60.0 / f64::from(bpm);
             if (period / best.1 - 1.0).abs() > 0.12 {
-                runner = runner.max(self.score(period, anchor));
+                runner = runner.max(self.candidate_score(period).0);
             }
         }
         if (best.1 / self.candidate - 1.0).abs() < 0.04 {
@@ -217,7 +262,13 @@ impl Tracker {
         let confidence =
             (best.0.min(1.0) * ((best.0 - runner) / 0.2).clamp(0.0, 1.0)).clamp(0.0, 1.0);
         self.confidence += (confidence - self.confidence) * 0.4;
-        if self.votes >= 3 && self.confidence >= 0.65 {
+        let octave_change = self.locked
+            && ((best.1 / self.period - 0.5).abs() < 0.08
+                || (best.1 / self.period - 2.0).abs() < 0.16);
+        if self.votes >= (if octave_change { 5 } else { 3 })
+            && self.confidence >= 0.65
+            && (!octave_change || best.0 - runner > 0.1)
+        {
             let changed = !self.locked || (best.1 / self.period - 1.0).abs() > 0.08;
             self.period = if changed {
                 best.1
@@ -225,13 +276,14 @@ impl Tracker {
                 self.period * 0.8 + best.1 * 0.2
             };
             if changed {
-                self.next = anchor + self.period;
+                self.next = best.2 + self.period;
                 while self.next <= time {
                     self.next += self.period;
                 }
             }
             self.locked = true;
             self.ever_locked = true;
+            self.last_support = self.last_support.max(latest);
         } else if self.confidence < 0.45 {
             self.locked = false;
             self.next = f64::INFINITY;

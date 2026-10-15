@@ -9,6 +9,17 @@ use std::{collections::VecDeque, mem::size_of};
 pub const MAX_HISTORY: usize = 64;
 pub const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 pub const DEFAULT_STRIP_INSET: f32 = 0.04;
+pub const PLACEMENT_GRID_DIVISIONS: usize = 50;
+pub const PLACEMENT_GRID_STEP: f32 = 1.0 / PLACEMENT_GRID_DIVISIONS as f32;
+
+/// Snap normalized placement to a fixed grid, independent of preview size.
+pub fn snap_placement(point: Point) -> Point {
+    let divisions = PLACEMENT_GRID_DIVISIONS as f32;
+    Point {
+        x: ((point.x * divisions).round() / divisions).clamp(0.0, 1.0),
+        y: ((point.y * divisions).round() / divisions).clamp(0.0, 1.0),
+    }
+}
 const MAX_PATH_POINTS: usize = 128;
 const MAX_STRIP_INSET: f32 = 0.49;
 
@@ -167,7 +178,30 @@ fn push_bounded(history: &mut VecDeque<Snapshot>, config: &Config, bytes: usize)
 fn config_bytes(config: &Config) -> usize {
     let mut bytes = size_of::<Config>()
         .saturating_add(config.ha_url.len())
+        .saturating_add(config.music.device.len())
+        .saturating_add(
+            config
+                .music
+                .alternating_order
+                .len()
+                .saturating_mul(size_of::<String>()),
+        )
+        .saturating_add(
+            config
+                .music
+                .light_overrides
+                .len()
+                .saturating_mul(size_of::<(String, crate::music::LightMusicOverride)>()),
+        )
         .saturating_add(config.lights.len().saturating_mul(size_of::<Light>()));
+    for id in config
+        .music
+        .light_overrides
+        .keys()
+        .chain(&config.music.alternating_order)
+    {
+        bytes = bytes.saturating_add(id.len());
+    }
     if let CaptureSelection::Desktop { id: Some(id) } = &config.source {
         bytes = bytes.saturating_add(id.len());
     }
@@ -194,6 +228,15 @@ fn config_bytes(config: &Config) -> usize {
             }
             Route::HomeAssistant { entity_id } => {
                 bytes = bytes.saturating_add(entity_id.len());
+            }
+            Route::Zigbee {
+                coordinator,
+                ieee_address,
+                ..
+            } => {
+                bytes = bytes
+                    .saturating_add(coordinator.len())
+                    .saturating_add(ieee_address.len());
             }
             Route::Mock => {}
         }
@@ -426,6 +469,15 @@ pub fn remove_path_point(points: &mut Vec<Point>, index: usize) -> bool {
 /// Move one selected handle by a normalized delta, clamping to the canvas.
 /// Bulb centers use handle index zero.
 pub fn move_selected(shape: &mut Shape, point_index: usize, delta: Point) -> bool {
+    move_selected_impl(shape, point_index, delta, false)
+}
+
+/// Grid nudges snap only the axes being moved; numeric entries stay exact.
+pub fn move_selected_on_grid(shape: &mut Shape, point_index: usize, delta: Point) -> bool {
+    move_selected_impl(shape, point_index, delta, true)
+}
+
+fn move_selected_impl(shape: &mut Shape, point_index: usize, delta: Point, grid: bool) -> bool {
     if !finite(delta) {
         return false;
     }
@@ -442,10 +494,19 @@ pub fn move_selected(shape: &mut Shape, point_index: usize, delta: Point) -> boo
     if !finite(*point) {
         return false;
     }
-    let moved = normalized(Point {
+    let mut moved = normalized(Point {
         x: point.x + delta.x,
         y: point.y + delta.y,
     });
+    if grid {
+        let snapped = snap_placement(moved);
+        if delta.x != 0.0 {
+            moved.x = snapped.x;
+        }
+        if delta.y != 0.0 {
+            moved.y = snapped.y;
+        }
+    }
     if *point == moved {
         return false;
     }
@@ -784,6 +845,33 @@ mod tests {
         let restored = history.redo(&first).unwrap();
         assert_eq!(restored, second);
         assert_eq!(history.undo(&restored), Some(first));
+    }
+
+    #[test]
+    fn oversized_music_drafts_respect_the_history_budget() {
+        for field in ["device", "light_overrides", "alternating_order"] {
+            let before = Config::default();
+            let mut edited = before.clone();
+            edited.music.brightness = 0.5;
+            let mut history = EditHistory::default();
+            assert!(history.checkpoint(&before, &edited));
+
+            let huge = "x".repeat(MAX_HISTORY_BYTES + 1);
+            match field {
+                "device" => edited.music.device = huge,
+                "light_overrides" => {
+                    edited
+                        .music
+                        .light_overrides
+                        .insert(huge, Default::default());
+                }
+                "alternating_order" => edited.music.alternating_order.push(huge),
+                _ => unreachable!(),
+            }
+            assert!(!history.checkpoint(&edited, &before), "{field}");
+            assert!(!history.can_undo(), "{field}");
+            assert_eq!(history.retained_bytes(), 0);
+        }
     }
 
     #[test]

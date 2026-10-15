@@ -14,6 +14,7 @@ struct Buffer {
     error: Option<String>,
     format_ready: bool,
     discontinuity: bool,
+    received_at: Option<Instant>,
 }
 pub(super) struct Playback {
     // Unregister the callback before dropping its stream and loop.
@@ -21,6 +22,7 @@ pub(super) struct Playback {
     stream: pw::stream::StreamRc,
     main_loop: pw::main_loop::MainLoopRc,
     buffer: Rc<RefCell<Buffer>>,
+    last_queue_age: Option<Duration>,
 }
 impl Playback {
     pub fn open(device: &str) -> Result<Self> {
@@ -44,6 +46,7 @@ impl Playback {
             error: None,
             format_ready: false,
             discontinuity: false,
+            received_at: None,
         }));
         let listener = stream
             .add_local_listener_with_user_data(buffer.clone())
@@ -59,6 +62,7 @@ impl Playback {
                 let mut state = data.borrow_mut();
                 let had_format = state.format_ready;
                 state.samples.clear();
+                state.received_at = None;
                 state.discontinuity |= had_format;
                 state.format_ready = false;
                 let Some(param) = param else {
@@ -93,6 +97,9 @@ impl Playback {
                     return;
                 };
                 if let Some(bytes) = audio_bytes(mapped, offset, size, stride) {
+                    if state.samples.is_empty() && !bytes.is_empty() {
+                        state.received_at = Some(Instant::now());
+                    }
                     if size > MAX_SAMPLES * 4 {
                         state.discontinuity = true;
                     }
@@ -146,11 +153,13 @@ impl Playback {
             stream,
             main_loop,
             buffer,
+            last_queue_age: None,
         })
     }
 }
 impl AudioSource for Playback {
     fn next_samples(&mut self, timeout: Duration) -> Result<Option<Vec<f32>>> {
+        self.last_queue_age = None;
         let deadline = Instant::now() + timeout.min(Duration::from_millis(50));
         loop {
             let dispatched = self
@@ -163,6 +172,7 @@ impl AudioSource for Playback {
                 anyhow::bail!("{error}");
             }
             if !buffer.samples.is_empty() {
+                self.last_queue_age = buffer.received_at.take().map(|at| at.elapsed());
                 return Ok(Some(buffer.samples.drain(..).collect()));
             }
             if buffer.format_ready && matches!(self.stream.state(), pw::stream::StreamState::Paused)
@@ -179,6 +189,9 @@ impl AudioSource for Playback {
     fn take_discontinuity(&mut self) -> bool {
         std::mem::take(&mut self.buffer.borrow_mut().discontinuity)
     }
+    fn estimated_queue_age(&self) -> Option<Duration> {
+        self.last_queue_age
+    }
 }
 
 fn audio_bytes(mapped: &[u8], offset: usize, size: usize, stride: i32) -> Option<&[u8]> {
@@ -191,9 +204,69 @@ fn audio_bytes(mapped: &[u8], offset: usize, size: usize, stride: i32) -> Option
     Some(&bytes[bytes.len().saturating_sub(MAX_SAMPLES * 4)..])
 }
 
+/// Device discovery runs on a background UI job, never in the capture callback.
+pub(crate) fn playback_sinks() -> Result<Vec<(String, String)>> {
+    let output = std::process::Command::new("pw-dump")
+        .output()
+        .context("run pw-dump to list PipeWire playback sinks")?;
+    ensure!(
+        output.status.success(),
+        "pw-dump failed while listing playback sinks"
+    );
+    ensure!(
+        output.stdout.len() <= 4 * 1024 * 1024,
+        "PipeWire device list is too large"
+    );
+    parse_playback_sinks(&output.stdout)
+}
+
+fn parse_playback_sinks(bytes: &[u8]) -> Result<Vec<(String, String)>> {
+    let nodes: Vec<serde_json::Value> =
+        serde_json::from_slice(bytes).context("parse PipeWire device list")?;
+    let mut sinks = Vec::new();
+    for node in nodes {
+        if node
+            .pointer("/info/props/media.class")
+            .and_then(serde_json::Value::as_str)
+            != Some("Audio/Sink")
+        {
+            continue;
+        }
+        let Some(name) = node
+            .pointer("/info/props/node.name")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        if name.is_empty() || name.len() > 1024 || name.chars().any(char::is_control) {
+            continue;
+        }
+        let description = node
+            .pointer("/info/props/node.description")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 1024)
+            .unwrap_or(name);
+        if sinks.len() >= 256 {
+            anyhow::bail!("too many PipeWire playback sinks");
+        }
+        sinks.push((name.to_owned(), description.to_owned()));
+    }
+    sinks.sort();
+    sinks.dedup_by(|a, b| a.0 == b.0);
+    Ok(sinks)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovery_reads_sink_nodes_only() {
+        let json = br#"[{"info":{"props":{"media.class":"Audio/Sink","node.name":"sink.one","node.description":"Speakers"}}},{"info":{"props":{"media.class":"Audio/Source","node.name":"mic"}}}]"#;
+        assert_eq!(
+            parse_playback_sinks(json).unwrap(),
+            vec![("sink.one".into(), "Speakers".into())]
+        );
+    }
     #[test]
     fn audio_buffer_bounds_offsets_and_work_are_bounded() {
         let bytes = vec![0; MAX_SAMPLES * 8 + 16];

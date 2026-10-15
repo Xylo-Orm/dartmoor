@@ -220,8 +220,8 @@ fn accents_are_bounded_spatial_and_zero_amount_restores_uniform_output() {
     );
 }
 #[test]
-fn mode_changes_gaps_and_nonfinite_audio_reset_safely() {
-    let mut settings = MusicSettings::default();
+fn gaps_and_nonfinite_audio_reset_safely() {
+    let settings = MusicSettings::default();
     let mut analyzer = Analyzer::default();
     feed(&mut analyzer, &rhythm(6, 0.2, false), &settings);
     analyzer.discontinuity();
@@ -230,11 +230,7 @@ fn mode_changes_gaps_and_nonfinite_audio_reset_safely() {
     analyzer.feed(&vec![f32::NAN; 4800], &settings);
     analyzer.feed(&vec![f32::INFINITY; 4800], &settings);
     assert!(analyzer.telemetry().pulse.is_finite());
-    settings.detector = DetectorMode::Classic;
-    analyzer.feed(&[0.0; 960], &settings);
-    assert_eq!(analyzer.telemetry().onsets, 0);
-    assert_eq!(analyzer.telemetry().sparkle_onsets, 0);
-    settings.detector = DetectorMode::Advanced;
+    analyzer.idle(std::time::Duration::from_secs(5), &settings);
     analyzer.feed(&[0.0; 960], &settings);
     assert_eq!(analyzer.colors(1, &settings), vec![[0; 3]]);
 }
@@ -260,44 +256,63 @@ fn advanced_noise_floor_does_not_amplify_quiet_tones_or_silence() {
 }
 
 #[test]
+fn idle_is_one_timeline_transition_and_manual_mode_tracks_configured_tempo() {
+    let mut settings = MusicSettings {
+        rhythm_mode: RhythmMode::Manual,
+        manual_bpm: 120.0,
+        ..Default::default()
+    };
+    let mut analyzer = Analyzer::default();
+    feed(&mut analyzer, &rhythm(4, 0.2, true), &settings);
+    assert_eq!(analyzer.telemetry().bpm, Some(120.0));
+    let before = analyzer.telemetry().capture_epoch;
+    analyzer.idle(std::time::Duration::from_millis(100), &settings);
+    let after = analyzer.telemetry().capture_epoch;
+    assert_eq!(after, before + 1);
+    analyzer.idle(std::time::Duration::from_millis(100), &settings);
+    assert_eq!(analyzer.telemetry().capture_epoch, after);
+    analyzer.feed(&[0.0; 960], &settings);
+    analyzer.idle(std::time::Duration::from_millis(100), &settings);
+    assert_eq!(analyzer.telemetry().capture_epoch, after + 1);
+    settings.manual_bpm = 150.0;
+    feed(&mut analyzer, &rhythm(2, 0.2, false), &settings);
+    assert_eq!(analyzer.telemetry().bpm, Some(150.0));
+}
+
+#[test]
 #[ignore = "release-only analysis/rendering benchmark, no native capture"]
 fn music_analysis_benchmark() {
     use std::time::Instant;
-    for mode in [DetectorMode::Classic, DetectorMode::Advanced] {
-        let settings = MusicSettings {
-            detector: mode,
-            ..Default::default()
-        };
-        let mut analyzer = Analyzer::default();
-        let audio = rhythm(8, 0.2, true);
-        feed(&mut analyzer, &audio, &settings);
-        let mut timings = Vec::with_capacity(8000);
-        for _ in 0..10 {
-            for block in audio.chunks(960) {
-                let start = Instant::now();
-                analyzer.feed(block, &settings);
-                timings.push(start.elapsed().as_secs_f64() * 1000.0);
-            }
+    let settings = MusicSettings::default();
+    let mut analyzer = Analyzer::default();
+    let audio = rhythm(8, 0.2, true);
+    feed(&mut analyzer, &audio, &settings);
+    let mut timings = Vec::with_capacity(8000);
+    for _ in 0..10 {
+        for block in audio.chunks(960) {
+            let start = Instant::now();
+            analyzer.feed(block, &settings);
+            timings.push(start.elapsed().as_secs_f64() * 1000.0);
         }
-        timings.sort_by(f64::total_cmp);
-        let average = timings.iter().sum::<f64>() / timings.len() as f64;
-        let p95 = timings[timings.len() * 95 / 100];
-        let p99 = timings[timings.len() * 99 / 100];
-        let maximum = timings[timings.len() - 1];
-        let start = Instant::now();
-        for _ in 0..1000 {
-            std::hint::black_box(analyzer.colors(60, &settings));
-        }
-        let typical = start.elapsed().as_secs_f64();
-        let start = Instant::now();
-        for _ in 0..1000 {
-            for _ in 0..8 {
-                std::hint::black_box(analyzer.colors(256, &settings));
-            }
-        }
-        println!(
-            "{mode:?}: analysis mean {average:.4} ms/hop p95 {p95:.4} p99 {p99:.4} max {maximum:.4}, render60 {typical:.4} ms/frame render2048 {:.4} ms/frame",
-            start.elapsed().as_secs_f64()
-        );
     }
+    timings.sort_by(f64::total_cmp);
+    let average = timings.iter().sum::<f64>() / timings.len() as f64;
+    let p95 = timings[timings.len() * 95 / 100];
+    let p99 = timings[timings.len() * 99 / 100];
+    let maximum = timings[timings.len() - 1];
+    let start = Instant::now();
+    for _ in 0..1000 {
+        std::hint::black_box(analyzer.colors(60, &settings));
+    }
+    let typical_ms = start.elapsed().as_secs_f64() * 1000.0 / 1000.0;
+    let start = Instant::now();
+    for _ in 0..1000 {
+        for _ in 0..8 {
+            std::hint::black_box(analyzer.colors(256, &settings));
+        }
+    }
+    println!(
+        "Advanced: analysis mean {average:.4} ms/hop p95 {p95:.4} p99 {p99:.4} max {maximum:.4}, render60 {typical_ms:.4} ms/frame render2048 {:.4} ms/frame",
+        start.elapsed().as_secs_f64() * 1000.0 / 1000.0
+    );
 }

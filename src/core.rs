@@ -8,40 +8,37 @@ use std::{collections::HashSet, sync::LazyLock, time::Duration};
 
 pub const SAMPLE_WIDTH: usize = 160;
 pub const SAMPLE_HEIGHT: usize = 90;
+pub(crate) const VIDEO_FEATURE_CHANNELS: usize = 62;
 
 /// Saved live controls; all amounts are normalized to 0..=1.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SoftAmbience {
     pub enabled: bool,
-    pub strength: f32,
-    pub color_emphasis: f32,
-    pub vibrancy: f32,
+    pub color_strength: f32,
+    pub response_ms: f32,
 }
 
 impl Default for SoftAmbience {
     fn default() -> Self {
         Self {
-            enabled: false,
-            strength: 0.6,
-            color_emphasis: 0.5,
-            vibrancy: 0.2,
+            enabled: true,
+            color_strength: 0.5,
+            response_ms: 50.0,
         }
     }
 }
 
 impl SoftAmbience {
     pub fn validate(&self) -> Result<()> {
-        for (name, value) in [
-            ("ambience strength", self.strength),
-            ("color emphasis", self.color_emphasis),
-            ("vibrancy", self.vibrancy),
-        ] {
-            ensure!(
-                value.is_finite() && (0.0..=1.0).contains(&value),
-                "{name} must be between 0 and 1"
-            );
-        }
+        ensure!(
+            self.color_strength.is_finite() && (0.0..=1.0).contains(&self.color_strength),
+            "color strength must be between 0 and 1"
+        );
+        ensure!(
+            self.response_ms.is_finite() && (0.0..=1500.0).contains(&self.response_ms),
+            "response must be between 0 and 1500 ms"
+        );
         Ok(())
     }
 }
@@ -83,12 +80,26 @@ pub enum Route {
     HomeAssistant {
         entity_id: String,
     },
+    Zigbee {
+        coordinator: String,
+        ieee_address: String,
+        endpoint: u8,
+    },
     Mock,
+}
+
+impl Route {
+    pub fn is_ambient(&self) -> bool {
+        matches!(self, Self::HomeAssistant { .. } | Self::Zigbee { .. })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Light {
+    /// Optional Video Response override, used when this light has bulb placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_response_ms: Option<f32>,
     pub id: String,
     pub name: String,
     pub shape: Shape,
@@ -109,6 +120,20 @@ pub struct Frame {
     pub height: usize,
     /// Row-major SDR sRGB pixels, without alpha.
     pub pixels: Vec<[u8; 3]>,
+    /// Optional unaveraged 4x4 capture taps for each preview cell.
+    pub taps: Option<Vec<[[u8; 3]; 16]>>,
+}
+
+impl Frame {
+    pub fn valid(&self) -> bool {
+        self.width > 0
+            && self.height > 0
+            && self.width.checked_mul(self.height) == Some(self.pixels.len())
+            && self
+                .taps
+                .as_ref()
+                .is_none_or(|taps| taps.len() == self.pixels.len())
+    }
 }
 
 /// WLED reports a MAC address; separators and ASCII case do not change identity.
@@ -131,6 +156,7 @@ pub fn validate_lights(lights: &[Light]) -> Result<()> {
     ensure!(lights.len() <= 64, "at most 64 lights are supported");
     let mut ids = HashSet::new();
     let mut entities = HashSet::new();
+    let mut zigbee_devices = HashSet::new();
     let mut total_zones = 0usize;
     let mut ranges: Vec<(String, String, usize, usize)> = Vec::new();
     for light in lights {
@@ -152,6 +178,13 @@ pub fn validate_lights(lights: &[Light]) -> Result<()> {
             "{}: zones must be between 1 and 256",
             light.name
         );
+        if let Some(response) = light.video_response_ms {
+            ensure!(
+                response.is_finite() && (0.0..=1500.0).contains(&response),
+                "{}: video response must be between 0 and 1500 ms",
+                light.name
+            );
+        }
         total_zones += light.zones;
         let check_point = |point: &Point| -> Result<()> {
             ensure!(
@@ -234,6 +267,26 @@ pub fn validate_lights(lights: &[Light]) -> Result<()> {
         );
         match &light.route {
             Route::Mock => {}
+            Route::Zigbee {
+                coordinator,
+                ieee_address,
+                endpoint,
+            } => {
+                ensure!(
+                    !coordinator.is_empty() && coordinator.len() <= 256,
+                    "Invalid USB coordinator identity"
+                );
+                crate::zigbee::validate_identity(ieee_address, *endpoint)?;
+                ensure!(light.zones == 1, "Zigbee lights require one color zone");
+                ensure!(
+                    zigbee_devices.insert((
+                        coordinator.clone(),
+                        ieee_address.to_lowercase(),
+                        *endpoint
+                    )),
+                    "Duplicate Zigbee device"
+                );
+            }
             Route::HomeAssistant { entity_id } => {
                 ensure!(
                     light.zones == 1,
@@ -250,7 +303,7 @@ pub fn validate_lights(lights: &[Light]) -> Result<()> {
                     "invalid Home Assistant light entity"
                 );
                 ensure!(
-                    entities.insert(entity_id.as_str()),
+                    entities.insert(entity_id.clone()),
                     "multiple routes for Home Assistant entity {entity_id}"
                 );
             }
@@ -317,6 +370,7 @@ struct Region {
     runs: Box<[PixelRun]>,
     feather: Box<[FeatherPixel]>,
     inverse_weight: f64,
+    quadrature: Box<[(u16, f32)]>,
 }
 
 // A row-prefix table has at most (160 + 1) * 90 entries, which fits in u16.
@@ -358,7 +412,39 @@ pub struct SamplingPlan {
 }
 
 impl SamplingPlan {
+    pub(crate) fn uniform_light(&self, light: usize) -> bool {
+        matches!(self.regions.get(light), Some(LightRegions::Uniform { .. }))
+    }
+    /// Owned geometry storage, excluding Vec allocator headers and caller buffers.
+    pub fn retained_bytes(&self) -> usize {
+        self.regions
+            .iter()
+            .map(|light| {
+                let regions: Vec<&Region> = match light {
+                    LightRegions::Uniform { region, .. } => vec![region],
+                    LightRegions::Ordered(regions) => regions.iter().collect(),
+                };
+                regions
+                    .into_iter()
+                    .map(|r| {
+                        std::mem::size_of::<Region>()
+                            + std::mem::size_of_val(r.runs.as_ref())
+                            + std::mem::size_of_val(r.feather.as_ref())
+                            + std::mem::size_of_val(r.quadrature.as_ref())
+                    })
+                    .sum::<usize>()
+            })
+            .sum()
+    }
     pub fn compile(lights: &[Light], width: usize, height: usize) -> Result<Self> {
+        Self::compile_with_cancel(lights, width, height, || false)
+    }
+    pub(crate) fn compile_with_cancel(
+        lights: &[Light],
+        width: usize,
+        height: usize,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Self> {
         ensure!(
             width > 0 && height > 0 && width <= SAMPLE_WIDTH && height <= SAMPLE_HEIGHT,
             "sampling frames must be downsampled to at most 160 × 90"
@@ -371,6 +457,7 @@ impl SamplingPlan {
         };
         let mut regions = Vec::with_capacity(lights.len());
         for light in lights {
+            ensure!(!cancelled(), "sampling plan compilation canceled");
             let light_regions = match &light.shape {
                 Shape::Bulb { center, radius } => {
                     let center = to_pixel(center);
@@ -394,31 +481,27 @@ impl SamplingPlan {
                     let total: f32 = lengths.iter().sum();
                     let mut regions: Vec<_> = if !segment_leds.is_empty() && light.zones > 1 {
                         let allocation = segment_zone_counts(segment_leds, light.zones);
-                        pixels
-                            .windows(2)
-                            .zip(allocation)
-                            .flat_map(|(pair, zones)| {
-                                (0..zones).map(move |zone| {
-                                    let a =
-                                        interpolate(pair[0], pair[1], zone as f32 / zones as f32);
-                                    let b = interpolate(
-                                        pair[0],
-                                        pair[1],
-                                        (zone + 1) as f32 / zones as f32,
-                                    );
-                                    make_region(&[a, b], radius * scale, width, height)
-                                })
-                            })
-                            .collect()
+                        let mut regions = Vec::with_capacity(light.zones);
+                        for (pair, zones) in pixels.windows(2).zip(allocation) {
+                            for zone in 0..zones {
+                                ensure!(!cancelled(), "sampling plan compilation canceled");
+                                let a = interpolate(pair[0], pair[1], zone as f32 / zones as f32);
+                                let b =
+                                    interpolate(pair[0], pair[1], (zone + 1) as f32 / zones as f32);
+                                regions.push(make_region(&[a, b], radius * scale, width, height));
+                            }
+                        }
+                        regions
                     } else {
-                        (0..light.zones)
-                            .map(|zone| {
-                                let start = total * zone as f32 / light.zones as f32;
-                                let end = total * (zone + 1) as f32 / light.zones as f32;
-                                let path = cut_path(&pixels, &lengths, start, end);
-                                make_region(&path, radius * scale, width, height)
-                            })
-                            .collect()
+                        let mut regions = Vec::with_capacity(light.zones);
+                        for zone in 0..light.zones {
+                            ensure!(!cancelled(), "sampling plan compilation canceled");
+                            let start = total * zone as f32 / light.zones as f32;
+                            let end = total * (zone + 1) as f32 / light.zones as f32;
+                            let path = cut_path(&pixels, &lengths, start, end);
+                            regions.push(make_region(&path, radius * scale, width, height));
+                        }
+                        regions
                     };
                     if *reverse {
                         regions.reverse();
@@ -478,86 +561,27 @@ impl SamplingPlan {
             })
             .collect()
     }
-    /// Bounded color-weighted moments, sharing row sums across all zones.
-    /// Disabled/zero-strength/invalid controls use the unchanged accurate path.
-    pub fn sample_with_ambience(
+    /// One bounded color-family feature vector per unique region. Buffers are reused.
+    pub(crate) fn integrate_features(
         &self,
-        frame: &Frame,
-        settings: SoftAmbience,
-    ) -> Vec<Vec<[f32; 3]>> {
-        self.enhance_accurate(frame, settings, self.sample(frame))
-    }
-
-    /// Reuse accurate samples for downstream darkness decisions.
-    pub(crate) fn enhance_accurate(
-        &self,
-        frame: &Frame,
-        settings: SoftAmbience,
-        accurate: Vec<Vec<[f32; 3]>>,
-    ) -> Vec<Vec<[f32; 3]>> {
-        if !settings.enabled
-            || settings.strength == 0.0
-            || settings.validate().is_err()
-            || frame.width != self.width
-            || frame.height != self.height
-            || frame.pixels.len() != self.width * self.height
-        {
-            return accurate;
-        }
-        static LINEAR: LazyLock<[f64; 256]> =
-            LazyLock::new(|| std::array::from_fn(|v| f64::from(srgb_to_linear(v as u8))));
-        let stride = self.width + 1;
-        let mut prefix = vec![[0.0; 4]; stride * self.height];
-        for (pixels, sums) in frame
-            .pixels
-            .chunks_exact(self.width)
-            .zip(prefix.chunks_exact_mut(stride))
-        {
-            let mut sum = [0.0; 4];
-            for (pixel, entry) in pixels.iter().zip(&mut sums[1..]) {
-                let rgb = pixel.map(|v| LINEAR[v as usize]);
-                let max = rgb.into_iter().fold(0.0f64, f64::max);
-                let min = rgb.into_iter().fold(1.0f64, f64::min);
-                // Absolute chroma times relative chroma suppresses dark noise.
-                // Bounded influence preserves area: one outlier cannot win a broad zone.
-                let chroma = if max > 0.0 {
-                    (max - min).powi(2) / max
-                } else {
-                    0.0
-                };
-                let weight = 1.0 + 4.0 * f64::from(settings.color_emphasis) * chroma;
-                for c in 0..3 {
-                    sum[c] += rgb[c] * weight;
+        cells: &[[f32; VIDEO_FEATURE_CHANNELS]],
+        output: &mut Vec<Vec<[f32; VIDEO_FEATURE_CHANNELS]>>,
+    ) {
+        output.resize_with(self.regions.len(), Vec::new);
+        for (light, target) in self.regions.iter().zip(output.iter_mut()) {
+            target.resize(light.zones(), [0.0; VIDEO_FEATURE_CHANNELS]);
+            match light {
+                LightRegions::Uniform { region, .. } => {
+                    let value = integrate(region, cells);
+                    target.fill(value);
                 }
-                sum[3] += weight;
-                *entry = sum;
+                LightRegions::Ordered(regions) => {
+                    for (region, slot) in regions.iter().zip(target.iter_mut()) {
+                        *slot = integrate(region, cells);
+                    }
+                }
             }
         }
-        self.regions
-            .iter()
-            .zip(accurate)
-            .map(|(light, colors)| {
-                let enhance = |region: &Region, accurate: [f32; 3]| {
-                    let sums = weighted_sum(region, &prefix);
-                    let representative = std::array::from_fn(|c| (sums[c] / sums[3]) as f32);
-                    let vibrant = vibrancy(representative, settings.vibrancy);
-                    std::array::from_fn(|c| {
-                        (accurate[c] + settings.strength * (vibrant[c] - accurate[c]))
-                            .clamp(0.0, 1.0)
-                    })
-                };
-                match light {
-                    LightRegions::Uniform { region, zones } => {
-                        vec![enhance(region, colors[0]); *zones]
-                    }
-                    LightRegions::Ordered(regions) => regions
-                        .iter()
-                        .zip(colors)
-                        .map(|(r, c)| enhance(r, c))
-                        .collect(),
-                }
-            })
-            .collect()
     }
 }
 
@@ -580,40 +604,17 @@ fn average(region: &Region, prefix: &[[f64; 3]]) -> [f32; 3] {
     color.map(|value| (value * region.inverse_weight) as f32)
 }
 
-fn weighted_sum(region: &Region, prefix: &[[f64; 4]]) -> [f64; 4] {
-    let mut sum = [0.0; 4];
-    for run in &region.runs {
-        for c in 0..4 {
-            sum[c] += prefix[run.end as usize][c] - prefix[run.start as usize][c];
+fn integrate(
+    region: &Region,
+    cells: &[[f32; VIDEO_FEATURE_CHANNELS]],
+) -> [f32; VIDEO_FEATURE_CHANNELS] {
+    let mut sums = [0.0f64; VIDEO_FEATURE_CHANNELS];
+    for &(index, weight) in region.quadrature.iter() {
+        for (sum, value) in sums.iter_mut().zip(cells[index as usize]) {
+            *sum += f64::from(value) * f64::from(weight);
         }
     }
-    for pixel in &region.feather {
-        for c in 0..4 {
-            sum[c] += (prefix[pixel.start as usize + 1][c] - prefix[pixel.start as usize][c])
-                * f64::from(pixel.weight);
-        }
-    }
-    sum
-}
-
-/// Linear-sRGB saturation about Rec.709 luminance. Reduce the requested chroma
-/// scale to fit the RGB cube, preserving luminance and hue without channel clipping.
-fn vibrancy(rgb: [f32; 3], amount: f32) -> [f32; 3] {
-    if amount == 0.0 || (rgb[0] == rgb[1] && rgb[1] == rgb[2]) {
-        return rgb;
-    }
-    let luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
-    let mut scale = 1.0 + 0.5 * amount;
-    for value in rgb {
-        let delta = value - luma;
-        if delta > 0.0 {
-            scale = scale.min((1.0 - luma) / delta);
-        }
-        if delta < 0.0 {
-            scale = scale.min(-luma / delta);
-        }
-    }
-    rgb.map(|v| (luma + (v - luma) * scale).clamp(0.0, 1.0))
+    sums.map(|v| v as f32)
 }
 
 fn distance(a: Point, b: Point) -> f32 {
@@ -738,6 +739,7 @@ fn make_region(path: &[Point], radius: f32, width: usize, height: usize) -> Regi
     let y1 = (max_y + radius + 1.0).ceil().max(0.0).min(height as f32) as usize;
     let mut runs = Vec::new();
     let mut feather = Vec::new();
+    let mut weighted = Vec::new();
     let mut total = 0.0;
     for y in y0..y1 {
         let row = y * (width + 1);
@@ -753,6 +755,9 @@ fn make_region(path: &[Point], radius: f32, width: usize, height: usize) -> Regi
             );
             let weight = (radius + 0.5 - d).clamp(0.0, 1.0);
             total += f64::from(weight);
+            if weight > 0.0 {
+                weighted.push(((y * width + x) as u16, weight));
+            }
             if weight == 1.0 {
                 run_start.get_or_insert(x);
             } else {
@@ -788,12 +793,143 @@ fn make_region(path: &[Point], radius: f32, width: usize, height: usize) -> Regi
             end: start + 1,
         });
         total = 1.0;
+        weighted.push(((y * width + x) as u16, 1.0));
     }
+    // The exact runs remain authoritative for Accurate sampling and darkness.
+    // Soft's color histogram integrates a fixed, stratified sample of their weights.
+    let quadrature = compile_quadrature(weighted, total, width, height);
     Region {
         runs: runs.into_boxed_slice(),
         feather: feather.into_boxed_slice(),
         inverse_weight: 1.0 / total,
+        quadrature: quadrature.into_boxed_slice(),
     }
+}
+
+fn hash32(mut x: u32) -> u32 {
+    x = (x ^ (x >> 16)).wrapping_mul(0x7feb352d);
+    x = (x ^ (x >> 15)).wrapping_mul(0x846ca68b);
+    x ^ (x >> 16)
+}
+
+/// Weighted 16x16 spatial strata avoid row-aligned checkerboard aliases while
+/// keeping at most 256 samples per region. Input is in row-major order.
+fn compile_quadrature(
+    weighted: Vec<(u16, f32)>,
+    total: f64,
+    width: usize,
+    height: usize,
+) -> Vec<(u16, f32)> {
+    if weighted.len() <= 256 {
+        return weighted
+            .into_iter()
+            .map(|(index, w)| (index, (f64::from(w) / total) as f32))
+            .collect();
+    }
+    let (nx, ny) = (width.min(16), height.min(16));
+    let tiles = nx * ny;
+    let tile_id = |index: u16| {
+        let (x, y) = (index as usize % width, index as usize / width);
+        (((y + 1) * ny - 1) / height) * nx + (((x + 1) * nx - 1) / width)
+    };
+    let mut counts = [0usize; 256];
+    let mut mass = [0.0f64; 256];
+    for &(index, w) in &weighted {
+        let tile = tile_id(index);
+        counts[tile] += 1;
+        mass[tile] += f64::from(w);
+    }
+    let mut starts = [0usize; 256];
+    let mut next = [0usize; 256];
+    for tile in 1..tiles {
+        starts[tile] = starts[tile - 1] + counts[tile - 1];
+    }
+    next[..tiles].copy_from_slice(&starts[..tiles]);
+    let mut ordered = vec![(0u16, 0.0f32); weighted.len()];
+    for pair in weighted {
+        let tile = tile_id(pair.0);
+        ordered[next[tile]] = pair;
+        next[tile] += 1;
+    }
+    let mut quota = [0usize; 256];
+    let mut remainders = [0.0f64; 256];
+    let mut allocated = 0;
+    for tile in 0..tiles {
+        let expected = 256.0 * mass[tile] / total;
+        quota[tile] = expected.floor() as usize;
+        remainders[tile] = expected - quota[tile] as f64;
+        allocated += quota[tile];
+    }
+    for _ in allocated..256 {
+        let tile = (0..tiles)
+            .max_by(|&a, &b| {
+                remainders[a]
+                    .total_cmp(&remainders[b])
+                    .then_with(|| b.cmp(&a))
+            })
+            .unwrap();
+        quota[tile] += 1;
+        remainders[tile] = -1.0;
+    }
+    let mut selected = Vec::with_capacity(256);
+    for tile in 0..tiles {
+        let n = quota[tile];
+        if n == 0 {
+            continue;
+        }
+        let slice = &ordered[starts[tile]..starts[tile] + counts[tile]];
+        let tx = tile % nx;
+        let ty = tile / nx;
+        let (x0, x1, y0, y1) = (
+            tx * width / nx,
+            (tx + 1) * width / nx,
+            ty * height / ny,
+            (ty + 1) * height / ny,
+        );
+        for j in 0..n {
+            let u = if n == 1 {
+                let x = x0
+                    + ((f64::from(hash32(tile as u32 + 44)) + 0.5) / 4294967296.0
+                        * (x1 - x0) as f64) as usize;
+                let y = y0
+                    + ((f64::from(hash32(tile as u32 + 1068)) + 0.5) / 4294967296.0
+                        * (y1 - y0) as f64) as usize;
+                let rank = (y - y0) * (x1 - x0) + (x - x0);
+                (rank as f64 + 0.5) / ((x1 - x0) * (y1 - y0)) as f64
+            } else {
+                (j as f64
+                    + (f64::from(hash32(tile as u32 * 257 + j as u32 + 44)) + 0.5) / 4294967296.0)
+                    / n as f64
+            };
+            let threshold = u * mass[tile];
+            let mut sum = 0.0;
+            let mut chosen = slice.last().unwrap().0;
+            for &(index, w) in slice {
+                sum += f64::from(w);
+                if sum >= threshold {
+                    chosen = index;
+                    break;
+                }
+            }
+            selected.push((chosen, (mass[tile] / total / n as f64) as f32));
+        }
+    }
+    selected.sort_unstable_by_key(|&(index, _)| index);
+    let mut merged: Vec<(u16, f32)> = Vec::with_capacity(selected.len());
+    for (index, w) in selected {
+        if let Some(last) = merged.last_mut()
+            && last.0 == index
+        {
+            last.1 += w;
+        } else {
+            merged.push((index, w));
+        }
+    }
+    let sum = merged.iter().map(|(_, w)| f64::from(*w)).sum::<f64>();
+    for (_, w) in &mut merged {
+        *w = (f64::from(*w) / sum) as f32;
+    }
+    merged
 }
 
 pub fn srgb_to_linear(value: u8) -> f32 {
@@ -858,235 +994,6 @@ pub fn smooth(
 mod tests {
     use super::*;
 
-    fn ambience() -> SoftAmbience {
-        SoftAmbience {
-            enabled: true,
-            strength: 1.0,
-            color_emphasis: 1.0,
-            vibrancy: 0.2,
-        }
-    }
-
-    #[test]
-    fn ambience_bypass_and_uniform_scenes() {
-        let plan = SamplingPlan::compile(&[strip(1, false)], 100, 2).unwrap();
-        for pixel in [[0; 3], [128; 3], [255; 3], [80, 150, 210], [255, 0, 0]] {
-            let frame = Frame {
-                width: 100,
-                height: 2,
-                pixels: vec![pixel; 200],
-            };
-            let accurate = plan.sample(&frame);
-            for settings in [
-                SoftAmbience::default(),
-                SoftAmbience {
-                    strength: 0.0,
-                    ..ambience()
-                },
-            ] {
-                assert_eq!(plan.sample_with_ambience(&frame, settings), accurate);
-            }
-            let enhanced = plan.sample_with_ambience(&frame, ambience())[0][0];
-            assert!(
-                enhanced
-                    .iter()
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-            );
-            if pixel[0] == pixel[1] && pixel[1] == pixel[2] {
-                for c in 0..3 {
-                    assert!((enhanced[c] - accurate[0][0][c]).abs() < 1e-6);
-                }
-            } else {
-                let unboosted = plan.sample_with_ambience(
-                    &frame,
-                    SoftAmbience {
-                        vibrancy: 0.0,
-                        ..ambience()
-                    },
-                );
-                for c in 0..3 {
-                    assert!((unboosted[0][0][c] - accurate[0][0][c]).abs() < 1e-6);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn ambience_emphasizes_area_without_outlier_domination_or_hue_switches() {
-        let plan = SamplingPlan::compile(&[strip(1, false)], 100, 2).unwrap();
-        let mixed = |n| Frame {
-            width: 100,
-            height: 2,
-            pixels: (0..200)
-                .map(|i| if i % 100 < n { [240, 30, 20] } else { [150; 3] })
-                .collect(),
-        };
-        let frame = mixed(30);
-        let accurate = plan.sample(&frame)[0][0];
-        let enhanced = plan.sample_with_ambience(&frame, ambience())[0][0];
-        assert!(enhanced[0] - enhanced[1] > 1.5 * (accurate[0] - accurate[1]));
-        let tiny = plan.sample_with_ambience(&mixed(1), ambience())[0][0];
-        assert!((tiny[0] - tiny[1]).abs() < 0.08);
-        let mut previous: Option<[f32; 3]> = None;
-        for n in 40..=60 {
-            let frame = Frame {
-                width: 100,
-                height: 2,
-                pixels: (0..200)
-                    .map(|i| {
-                        if i % 100 < n {
-                            [255, 0, 0]
-                        } else {
-                            [0, 255, 255]
-                        }
-                    })
-                    .collect(),
-            };
-            let color = plan.sample_with_ambience(&frame, ambience())[0][0];
-            assert!(
-                color
-                    .iter()
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-            );
-            if let Some(before) = previous {
-                for c in 0..3 {
-                    assert!((before[c] - color[c]).abs() < 0.03);
-                }
-            }
-            previous = Some(color);
-        }
-    }
-
-    #[test]
-    fn vibrancy_preserves_luminance_and_fits_gamut() {
-        let luminance = |rgb: [f32; 3]| rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
-        for rgb in [
-            [0.2, 0.4, 0.6],
-            [0.0, 0.5, 1.0],
-            [0.8, 0.7, 0.2],
-            [0.0001, 0.0002, 0.0003],
-        ] {
-            let enhanced = vibrancy(rgb, 1.0);
-            assert!((luminance(enhanced) - luminance(rgb)).abs() < 1e-6);
-            assert!(
-                enhanced
-                    .iter()
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-            );
-        }
-        assert_eq!(vibrancy([0.2, 0.4, 0.6], 0.0), [0.2, 0.4, 0.6]);
-        for value in [0.0, 0.001, 0.5, 1.0] {
-            assert_eq!(vibrancy([value; 3], 1.0), [value; 3]);
-        }
-    }
-
-    #[test]
-    fn ambience_matches_spatial_weight_oracle_and_blends_in_linear_light() {
-        let light = strip(3, false);
-        let frame = Frame {
-            width: 37,
-            height: 19,
-            pixels: (0..37 * 19)
-                .map(|i| [(i * 71 % 256) as u8, (i * 13 % 256) as u8, (i % 7) as u8])
-                .collect(),
-        };
-        let plan = SamplingPlan::compile(&[light], 37, 19).unwrap();
-        let LightRegions::Ordered(regions) = &plan.regions[0] else {
-            unreachable!()
-        };
-        let accurate = plan.sample(&frame);
-        assert_eq!(
-            plan.sample_with_ambience(&frame, SoftAmbience::default()),
-            accurate
-        );
-        assert_eq!(
-            plan.sample_with_ambience(
-                &frame,
-                SoftAmbience {
-                    strength: 0.0,
-                    ..ambience()
-                }
-            ),
-            accurate
-        );
-        let settings = SoftAmbience {
-            vibrancy: 0.0,
-            ..ambience()
-        };
-        let enhanced = plan.sample_with_ambience(&frame, settings);
-        let halfway = plan.sample_with_ambience(
-            &frame,
-            SoftAmbience {
-                strength: 0.5,
-                ..settings
-            },
-        );
-        for (i, region) in regions.iter().enumerate() {
-            let mut sum = [0.0f64; 4];
-            let mut accumulate = |index: usize, spatial: f64| {
-                let rgb = frame.pixels[index].map(|v| f64::from(srgb_to_linear(v)));
-                let max = rgb.into_iter().fold(0.0f64, f64::max);
-                let min = rgb.into_iter().fold(1.0f64, f64::min);
-                let weight = spatial * (1.0 + 4.0 * (max - min).powi(2) / max.max(1e-20));
-                for c in 0..3 {
-                    sum[c] += rgb[c] * weight;
-                }
-                sum[3] += weight;
-            };
-            for run in &region.runs {
-                for index in run.start as usize..run.end as usize {
-                    accumulate(index / 38 * 37 + index % 38, 1.0);
-                }
-            }
-            for pixel in &region.feather {
-                let index = pixel.start as usize;
-                accumulate(index / 38 * 37 + index % 38, f64::from(pixel.weight));
-            }
-            for c in 0..3 {
-                assert!((enhanced[0][i][c] - (sum[c] / sum[3]) as f32).abs() < 1e-6);
-                assert!(
-                    (halfway[0][i][c] - (accurate[0][i][c] + enhanced[0][i][c]) * 0.5).abs() < 1e-6
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn ambience_retains_zone_direction_and_bulb_broadcast() {
-        let frame = Frame {
-            width: 100,
-            height: 2,
-            pixels: (0..200)
-                .map(|i| match i % 100 {
-                    0..30 => [230, 20, 10],
-                    50..80 => [10, 20, 230],
-                    _ => [150; 3],
-                })
-                .collect(),
-        };
-        let forward = SamplingPlan::compile(&[strip(2, false)], 100, 2)
-            .unwrap()
-            .sample_with_ambience(&frame, ambience());
-        let reverse = SamplingPlan::compile(&[strip(2, true)], 100, 2)
-            .unwrap()
-            .sample_with_ambience(&frame, ambience());
-        assert!(forward[0][0][0] > forward[0][0][2]);
-        assert!(forward[0][1][2] > forward[0][1][0]);
-        assert_eq!(
-            forward[0],
-            reverse[0].iter().rev().copied().collect::<Vec<_>>()
-        );
-        let mut bulb = strip(4, false);
-        bulb.shape = Shape::Bulb {
-            center: Point { x: 0.1, y: 0.5 },
-            radius: 0.1,
-        };
-        let colors = SamplingPlan::compile(&[bulb], 100, 2)
-            .unwrap()
-            .sample_with_ambience(&frame, ambience());
-        assert_eq!(colors[0], vec![colors[0][0]; 4]);
-    }
-
     #[test]
     fn explicit_segment_sampling_stays_within_each_segment_and_reverses() {
         let points = vec![
@@ -1108,6 +1015,8 @@ mod tests {
             pixels: (0..800)
                 .map(|i| [(i % 40 * 6) as u8, (i / 40 * 12) as u8, 80])
                 .collect(),
+
+            taps: None,
         };
         let pixels: Vec<_> = points
             .iter()
@@ -1242,6 +1151,7 @@ mod tests {
     }
     fn strip(zones: usize, reverse: bool) -> Light {
         Light {
+            video_response_ms: None,
             id: "strip".into(),
             name: "Strip".into(),
             shape: Shape::Strip {
@@ -1348,12 +1258,15 @@ mod tests {
                 pixels: (0..width * height)
                     .map(|i| [(i * 71 % 256) as u8, (i * 13 % 256) as u8, (i % 7) as u8])
                     .collect(),
+
+                taps: None,
             };
             for radius in [0.00001, 0.035, 0.3, 1.0] {
                 let mut lights: Vec<_> = [(0.0, 0.0), (1.0, 1.0), (0.413, 0.891)]
                     .into_iter()
                     .enumerate()
                     .map(|(i, (x, y))| Light {
+                        video_response_ms: None,
                         id: format!("bulb-{i}"),
                         name: format!("Bulb {i}"),
                         shape: Shape::Bulb {
@@ -1368,6 +1281,7 @@ mod tests {
                     for zones in [1, 9] {
                         for reverse in [false, true] {
                             lights.push(Light {
+                                video_response_ms: None,
                                 id: format!("strip-{i}-{zones}-{reverse}"),
                                 name: "Strip".into(),
                                 shape: Shape::Strip {
@@ -1405,6 +1319,7 @@ mod tests {
     #[test]
     fn prefix_subtraction_preserves_a_dark_pixel_after_a_bright_row() {
         let light = Light {
+            video_response_ms: None,
             id: "dark-pixel".into(),
             name: "Dark pixel".into(),
             shape: Shape::Bulb {
@@ -1418,6 +1333,8 @@ mod tests {
             width: 160,
             height: 1,
             pixels: vec![[255; 3]; 160],
+
+            taps: None,
         };
         frame.pixels[159] = [1, 2, 3];
         assert_eq!(
@@ -1438,11 +1355,14 @@ mod tests {
                 width: 160,
                 height: 90,
                 pixels: vec![[0, 255, 0]; 160 * 90],
+
+                taps: None,
             };
             frame.pixels[0] = [255, 0, 0];
             for zones in [1, 8] {
                 for reverse in [false, true] {
                     let light = Light {
+                        video_response_ms: None,
                         id: "collapsed-strip".into(),
                         name: "Tiny strip".into(),
                         zones,
@@ -1468,9 +1388,64 @@ mod tests {
     }
 
     #[test]
+    fn stratified_quadrature_retains_shifted_pattern_support() {
+        let region = make_region(&[Point { x: 80.0, y: 45.0 }], 200.0, 160, 90);
+        assert_eq!(region.quadrature.len(), 256);
+        let mut worst = 0.0f32;
+        for width in [1, 2, 3, 7, 16] {
+            for (numerator, denominator) in [(3, 10), (1, 2), (1, 20)] {
+                for axis in [0, 1] {
+                    for offset in 0..=16 {
+                        let marked = |index: usize| {
+                            let pos = if axis == 0 { index % 160 } else { index / 160 };
+                            (pos + offset) % (width * denominator) < width * numerator
+                        };
+                        let exact =
+                            (0..160 * 90).filter(|&i| marked(i)).count() as f32 / (160 * 90) as f32;
+                        let estimated = region
+                            .quadrature
+                            .iter()
+                            .filter(|(i, _)| marked(*i as usize))
+                            .map(|(_, w)| w)
+                            .sum::<f32>();
+                        worst = worst.max((exact - estimated).abs());
+                        assert!(
+                            (exact - estimated).abs() <= 0.06,
+                            "width {width} fraction {numerator}/{denominator} axis {axis} offset {offset}: exact {exact}, estimate {estimated}"
+                        );
+                    }
+                }
+            }
+            for shift_x in 0..=16 {
+                for shift_y in 0..=16 {
+                    let marked = |index: usize| {
+                        (((index % 160 + shift_x) / width) + ((index / 160 + shift_y) / width))
+                            .is_multiple_of(2)
+                    };
+                    let exact =
+                        (0..160 * 90).filter(|&i| marked(i)).count() as f32 / (160 * 90) as f32;
+                    let estimate = region
+                        .quadrature
+                        .iter()
+                        .filter(|(i, _)| marked(*i as usize))
+                        .map(|(_, weight)| weight)
+                        .sum::<f32>();
+                    worst = worst.max((exact - estimate).abs());
+                    assert!(
+                        (exact - estimate).abs() <= 0.06,
+                        "checker width {width} shifts {shift_x},{shift_y}: {exact} vs {estimate}"
+                    );
+                }
+            }
+        }
+        assert!(worst > 0.04); // This estimator is deliberately approximate.
+    }
+
+    #[test]
     fn maximum_broad_strips_store_runs_instead_of_millions_of_pixel_weights() {
         let lights: Vec<_> = (0..8)
             .map(|i| Light {
+                video_response_ms: None,
                 id: format!("strip-{i}"),
                 name: format!("Strip {i}"),
                 shape: Shape::Strip {
@@ -1492,17 +1467,32 @@ mod tests {
             };
             for region in regions {
                 region_count += 1;
+                assert!(region.quadrature.len() <= 256);
+                assert!(
+                    (region
+                        .quadrature
+                        .iter()
+                        .map(|(_, w)| f64::from(*w))
+                        .sum::<f64>()
+                        - 1.0)
+                        .abs()
+                        < 1e-6
+                );
                 stored_bytes += std::mem::size_of::<Region>()
                     + std::mem::size_of_val(region.runs.as_ref())
-                    + std::mem::size_of_val(region.feather.as_ref());
+                    + std::mem::size_of_val(region.feather.as_ref())
+                    + std::mem::size_of_val(region.quadrature.as_ref());
             }
         }
         assert_eq!(region_count, 2048);
-        assert!(stored_bytes < 4 * 1024 * 1024, "{stored_bytes} bytes");
+        assert!(stored_bytes < 8 * 1024 * 1024, "{stored_bytes} bytes");
+        assert_eq!(stored_bytes, plan.retained_bytes());
         let frame = Frame {
             width: SAMPLE_WIDTH,
             height: SAMPLE_HEIGHT,
             pixels: vec![[12, 127, 240]; SAMPLE_WIDTH * SAMPLE_HEIGHT],
+
+            taps: None,
         };
         let expected = [12, 127, 240].map(srgb_to_linear);
         let output = plan.sample(&frame);
@@ -1522,6 +1512,8 @@ mod tests {
             pixels: (0..20)
                 .map(|index| if index % 10 < 5 { [0; 3] } else { [255; 3] })
                 .collect(),
+
+            taps: None,
         };
         let color = plan.sample(&frame)[0][0];
         assert!((color[0] - 0.5).abs() < 0.001);
@@ -1541,6 +1533,8 @@ mod tests {
                     }
                 })
                 .collect(),
+
+            taps: None,
         };
         let forward = SamplingPlan::compile(&[strip(2, false)], 10, 2)
             .unwrap()
@@ -1554,6 +1548,7 @@ mod tests {
     #[test]
     fn bulb_average_is_broadcast_without_changing_zone_or_light_order() {
         let bulb = |id: &str, x: f32, zones: usize| Light {
+            video_response_ms: None,
             id: id.into(),
             name: id.into(),
             route: Route::Mock,
@@ -1575,6 +1570,8 @@ mod tests {
                     }
                 })
                 .collect(),
+
+            taps: None,
         };
         let lights = [bulb("left", 0.1, 3), strip(2, false), bulb("right", 0.9, 5)];
         let plan = SamplingPlan::compile(&lights, 10, 2).unwrap();
@@ -1587,6 +1584,8 @@ mod tests {
             width: 10,
             height: 2,
             pixels: vec![],
+
+            taps: None,
         };
         assert_eq!(
             plan.sample(&invalid),
@@ -1606,6 +1605,7 @@ mod tests {
         assert!(SamplingPlan::compile(&[light], 160, 90).is_err());
         assert!(SamplingPlan::compile(&[], 1920, 1080).is_err());
         let tiny = Light {
+            video_response_ms: None,
             id: "tiny".into(),
             name: "Tiny".into(),
             shape: Shape::Bulb {
@@ -1621,8 +1621,21 @@ mod tests {
                 width: 1,
                 height: 1,
                 pixels: vec![[255; 3]],
+
+                taps: None,
             });
         assert_eq!(sample, vec![vec![[1.0; 3]]]);
+    }
+    #[test]
+    fn geometry_compilation_observes_cancellation_between_regions() {
+        let calls = std::cell::Cell::new(0);
+        let result = SamplingPlan::compile_with_cancel(&[strip(8, false)], 160, 90, || {
+            let seen = calls.get();
+            calls.set(seen + 1);
+            seen >= 3
+        });
+        assert!(result.is_err());
+        assert!(calls.get() >= 4);
     }
     #[test]
     fn smoothing_depends_on_elapsed_time() {

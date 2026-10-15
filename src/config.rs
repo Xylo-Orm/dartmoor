@@ -14,7 +14,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub const CONFIG_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 2;
+fn default_true() -> bool {
+    true
+}
 pub(crate) const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -26,7 +29,7 @@ pub struct Config {
     pub fps: u32,
     pub smoothing_ms: f32,
     pub brightness: f32,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub black_bar_detection: bool,
     #[serde(default)]
     pub soft_ambience: SoftAmbience,
@@ -48,6 +51,7 @@ impl Default for Config {
             version: CONFIG_VERSION,
             source: CaptureSelection::Synthetic,
             lights: vec![Light {
+                video_response_ms: None,
                 id: "demo-strip".into(),
                 name: "Demo strip".into(),
                 shape: Shape::Strip {
@@ -61,8 +65,8 @@ impl Default for Config {
             }],
             fps: 30,
             smoothing_ms: 120.0,
-            brightness: 0.7,
-            black_bar_detection: false,
+            brightness: 1.0,
+            black_bar_detection: true,
             soft_ambience: SoftAmbience::default(),
             dark_zones: crate::dark_zones::DarkZones::default(),
             mode: crate::music::SyncMode::default(),
@@ -125,6 +129,18 @@ impl Config {
         self.soft_ambience.validate()?;
         self.dark_zones.validate()?;
         self.music.validate()?;
+        for id in self.music.light_overrides.keys() {
+            ensure!(
+                self.lights.iter().any(|light| light.id == *id),
+                "music override references unknown light: {id}"
+            );
+        }
+        for id in &self.music.alternating_order {
+            ensure!(
+                self.lights.iter().any(|light| light.id == *id),
+                "alternating order references unknown light: {id}"
+            );
+        }
         validate_lights(&self.lights)
     }
 }
@@ -145,6 +161,12 @@ pub(crate) fn decode_layout(json: &str) -> Result<Config> {
 }
 
 fn decode_layout_bytes(bytes: &[u8]) -> Result<Config> {
+    let config = parse_layout_bytes(bytes)?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn parse_layout_bytes(bytes: &[u8]) -> Result<Config> {
     // Check bytes before invoking serde, including malformed and multibyte input.
     ensure!(
         bytes.len() as u64 <= MAX_CONFIG_BYTES,
@@ -173,7 +195,6 @@ fn decode_layout_bytes(bytes: &[u8]) -> Result<Config> {
             );
         }
     }
-    config.validate()?;
     Ok(config)
 }
 
@@ -183,14 +204,19 @@ pub fn path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("lumen-desktop-config.json"))
 }
 
-/// Invalid files are preserved verbatim and reported; startup uses safe mock defaults.
+/// Invalid files are preserved verbatim and reported; the editor sanitizes the fallback.
 pub fn load() -> (Config, Option<String>) {
     load_from(&path())
 }
 
 fn load_from(path: &Path) -> (Config, Option<String>) {
-    match read_config(path) {
-        Ok(config) => (config, None),
+    match read_saved_config(path) {
+        Ok((config, removed)) => (
+            config,
+            (removed > 0).then(|| format!(
+                "Removed {removed} retired MQTT/Matter/Tapo light(s) from the loaded layout. Other devices and settings were retained; the original file will be backed up when saving."
+            )),
+        ),
         Err(error)
             if error
                 .downcast_ref::<std::io::Error>()
@@ -201,14 +227,19 @@ fn load_from(path: &Path) -> (Config, Option<String>) {
         Err(error) => (
             Config::default(),
             Some(format!(
-                "Could not load {}: {error:#}. Safe demo defaults loaded; the original file was preserved.",
+                "Could not load {}: {error:#}. Safe defaults loaded; the original file was preserved.",
                 path.display()
             )),
         ),
     }
 }
 
+#[cfg(test)]
 fn read_config(path: &Path) -> Result<Config> {
+    read_saved_config(path).map(|(config, _)| config)
+}
+
+fn read_saved_config(path: &Path) -> Result<(Config, usize)> {
     let file = fs::File::open(path)?;
     ensure!(
         file.metadata()?.len() <= MAX_CONFIG_BYTES,
@@ -216,7 +247,73 @@ fn read_config(path: &Path) -> Result<Config> {
     );
     let mut bytes = Vec::new();
     file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
-    decode_layout_bytes(&bytes)
+    match decode_layout_bytes(&bytes) {
+        Ok(config) => Ok((config, 0)),
+        Err(error) => migrate_retired_lights(&bytes).or(Err(error)),
+    }
+}
+
+/// Load-only compatibility for retired outputs. Preserve the raw JSON for all
+/// surviving fields so normal strict decoding still catches duplicate fields,
+/// unknown keys and invalid settings. Imports keep requiring the current schema.
+fn migrate_retired_lights(bytes: &[u8]) -> Result<(Config, usize)> {
+    use serde_json::value::RawValue;
+
+    ensure!(
+        bytes.len() as u64 <= MAX_CONFIG_BYTES,
+        "configuration exceeds 1 MiB"
+    );
+    #[derive(Deserialize)]
+    struct SavedLayout<'a> {
+        #[serde(borrow)]
+        lights: &'a RawValue,
+    }
+    #[derive(Deserialize)]
+    struct SavedLight {
+        id: String,
+        route: SavedRoute,
+    }
+    #[derive(Deserialize)]
+    struct SavedRoute {
+        kind: String,
+    }
+    let layout: SavedLayout<'_> = serde_json::from_slice(bytes)?;
+    let lights: Vec<&RawValue> = serde_json::from_str(layout.lights.get())?;
+    let mut retired = std::collections::HashSet::new();
+    let mut kept = Vec::new();
+    let mut removed = 0;
+    for raw in lights {
+        let light: SavedLight = serde_json::from_str(raw.get())?;
+        if matches!(light.route.kind.as_str(), "mqtt" | "matter" | "tapo") {
+            retired.insert(light.id);
+            removed += 1;
+        } else {
+            kept.push(raw.get());
+        }
+    }
+    ensure!(removed > 0, "no retired outputs in saved configuration");
+    // RawValue borrows the original input, giving the exact array span without
+    // reserializing the rest of the document (which would erase duplicate keys).
+    let start = layout.lights.get().as_ptr() as usize - bytes.as_ptr() as usize;
+    let end = start + layout.lights.get().len();
+    let replacement = format!("[{}]", kept.join(","));
+    let mut filtered = Vec::with_capacity(bytes.len());
+    filtered.extend_from_slice(&bytes[..start]);
+    filtered.extend_from_slice(replacement.as_bytes());
+    filtered.extend_from_slice(&bytes[end..]);
+    let mut config = parse_layout_bytes(&filtered)?;
+    // A reused ID still belonging to a supported light must keep its settings.
+    retired.retain(|id| !config.lights.iter().any(|light| &light.id == id));
+    config
+        .music
+        .light_overrides
+        .retain(|id, _| !retired.contains(id));
+    config
+        .music
+        .alternating_order
+        .retain(|id| !retired.contains(id));
+    config.validate()?;
+    Ok((config, removed))
 }
 
 pub fn save(config: &Config) -> Result<()> {
@@ -283,492 +380,4 @@ fn backup_invalid_config(path: &Path, parent: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn dark_and_music_settings_default_validate_and_roundtrip() {
-        let mut config = Config::default();
-        let mut old = serde_json::to_value(&config).unwrap();
-        for field in ["dark_zones", "mode", "music"] {
-            old.as_object_mut().unwrap().remove(field);
-        }
-        assert_eq!(decode_layout(&old.to_string()).unwrap(), config);
-        config.dark_zones = crate::dark_zones::DarkZones {
-            enabled: true,
-            threshold: 24,
-        };
-        config.mode = crate::music::SyncMode::Music;
-        config.music.input = crate::music::AudioInput::Demo;
-        config.music.color = [10, 40, 240];
-        config.music.decay_ms = 500.0;
-        let json = encode_layout(&config).unwrap();
-        assert_eq!(decode_layout(&json).unwrap(), config);
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.json");
-        save_to(&config, &path).unwrap();
-        assert_eq!(read_config(&path).unwrap(), config);
-        for bad in [
-            "\"dark_zones\": {\"enabled\": true, \"threshold\": 65}",
-            "\"dark_zones\": {\"unknown\": 1}",
-            "\"dark_zones\": {\"threshold\": 8, \"threshold\": 9}",
-        ] {
-            let mut value = serde_json::to_value(Config::default()).unwrap();
-            value.as_object_mut().unwrap().remove("dark_zones");
-            let document = value.to_string();
-            let document = format!("{},{} }}", &document[..document.len() - 1], bad);
-            assert!(decode_layout(&document).is_err());
-        }
-        for field in 0..4 {
-            for value in [f32::NAN, f32::INFINITY, -1.0, 3000.0] {
-                let mut invalid = config.clone();
-                match field {
-                    0 => invalid.music.sensitivity = value,
-                    1 => invalid.music.attack_ms = value,
-                    2 => invalid.music.decay_ms = value,
-                    _ => invalid.music.brightness = value,
-                }
-                assert!(invalid.validate().is_err());
-            }
-        }
-        let mut invalid = serde_json::to_value(&config).unwrap();
-        invalid["music"]["unknown"] = serde_json::json!(true);
-        assert!(decode_layout(&invalid.to_string()).is_err());
-    }
-    #[test]
-    fn advanced_music_defaults_and_controls_are_strict_and_persistent() {
-        use crate::music::{DetectorMode, MusicSettings};
-        let old = r#"{"input":"playback","device":"","sensitivity":0.8,"attack_ms":20,"decay_ms":240,"brightness":0.7,"color":[100,170,255]}"#;
-        let decoded: MusicSettings = serde_json::from_str(old).unwrap();
-        assert_eq!(decoded.detector, DetectorMode::Advanced);
-        assert_eq!(decoded.sensitivity, 0.8);
-        assert_eq!(decoded.subbass_weight, 0.2);
-        assert_eq!(decoded.sparkle_amount, 0.35);
-        assert!(decoded.follow_beat);
-        for json in [
-            r#"{"detector":"unknown"}"#,
-            r#"{"follow_beat":false,"follow_beat":true}"#,
-        ] {
-            assert!(serde_json::from_str::<MusicSettings>(json).is_err());
-        }
-        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
-            assert!(
-                MusicSettings {
-                    subbass_weight: value,
-                    ..Default::default()
-                }
-                .validate()
-                .is_err()
-            );
-            assert!(
-                MusicSettings {
-                    sparkle_amount: value,
-                    ..Default::default()
-                }
-                .validate()
-                .is_err()
-            );
-        }
-        let mut config = Config::default();
-        config.music.detector = DetectorMode::Classic;
-        config.music.subbass_weight = 0.7;
-        config.music.sparkle_amount = 0.9;
-        config.music.follow_beat = false;
-        assert_eq!(
-            decode_layout(&encode_layout(&config).unwrap()).unwrap(),
-            config
-        );
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("advanced.json");
-        save_to(&config, &path).unwrap();
-        assert_eq!(read_config(&path).unwrap(), config);
-    }
-    #[test]
-    fn soft_ambience_defaults_strict_validation_and_persistence() {
-        let mut config = Config::default();
-        let mut old = serde_json::to_value(&config).unwrap();
-        old.as_object_mut().unwrap().remove("soft_ambience");
-        assert_eq!(
-            decode_layout(&old.to_string()).unwrap().soft_ambience,
-            SoftAmbience::default()
-        );
-        config.soft_ambience = SoftAmbience {
-            enabled: true,
-            strength: 0.75,
-            color_emphasis: 0.7,
-            vibrancy: 0.4,
-        };
-        assert_eq!(
-            decode_layout(&encode_layout(&config).unwrap()).unwrap(),
-            config
-        );
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.json");
-        save_to(&config, &path).unwrap();
-        assert_eq!(read_config(&path).unwrap(), config);
-        for value in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
-            for field in 0..3 {
-                let mut invalid = config.clone();
-                match field {
-                    0 => invalid.soft_ambience.strength = value,
-                    1 => invalid.soft_ambience.color_emphasis = value,
-                    _ => invalid.soft_ambience.vibrancy = value,
-                }
-                assert!(invalid.validate().is_err());
-            }
-        }
-        let json = encode_layout(&config)
-            .unwrap()
-            .replace("\"enabled\": true", "\"unknown\": true");
-        assert!(decode_layout(&json).is_err());
-    }
-
-    #[test]
-    fn segment_counts_survive_save_export_and_import() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.json");
-        let mut config = Config::default();
-        config.lights[0].shape = Shape::Strip {
-            points: crate::editor::strip_preset_points(crate::editor::StripPreset::Perimeter, 0.04),
-            radius: 0.04,
-            reverse: true,
-            segment_leds: vec![24, 40, 25, 38],
-        };
-        config.lights[0].route = Route::Wled {
-            host: "desk.local".into(),
-            start: 10,
-            count: 127,
-            device_id: "aabbccddeeff".into(),
-        };
-        save_to(&config, &path).unwrap();
-        assert_eq!(load_from(&path), (config.clone(), None));
-        let exported = encode_layout(&config).unwrap();
-        assert!(exported.contains("segment_leds"));
-        assert_eq!(decode_layout(&exported).unwrap(), config);
-    }
-    use super::*;
-
-    #[test]
-    fn layout_interchange_roundtrips_unicode_and_pretty_json() {
-        let mut config = Config::default();
-        config.lights[0].name = "Schreibtisch 🌈 東京".into();
-        config.source = CaptureSelection::Desktop {
-            id: Some("Anzeige-東京".into()),
-        };
-        config.restore_wled_state = true;
-        config.black_bar_detection = true;
-        let json = encode_layout(&config).unwrap();
-        assert!(json.contains("Schreibtisch 🌈 東京"));
-        assert!(json.contains("\n  \"version\""));
-        assert_eq!(decode_layout(&json).unwrap(), config);
-
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.json");
-        fs::write(&path, &json).unwrap();
-        assert_eq!(read_config(&path).unwrap(), config);
-        save_to(&config, &path).unwrap();
-        assert_eq!(fs::read_to_string(path).unwrap(), format!("{json}\n"));
-    }
-
-    #[test]
-    fn layout_export_rejects_invalid_current_configuration() {
-        let mut config = Config {
-            fps: 0,
-            ..Config::default()
-        };
-        assert!(encode_layout(&config).is_err());
-        config.fps = 30;
-        config.brightness = f32::NAN;
-        assert!(encode_layout(&config).is_err());
-        config.brightness = 0.7;
-        config.ha_url = "https://user:secret@example.com".into();
-        assert!(encode_layout(&config).is_err());
-    }
-
-    #[test]
-    fn layouts_without_black_bar_setting_default_to_disabled() {
-        let mut json = serde_json::to_value(Config::default()).unwrap();
-        json.as_object_mut().unwrap().remove("black_bar_detection");
-        assert!(
-            !decode_layout(&json.to_string())
-                .unwrap()
-                .black_bar_detection
-        );
-    }
-
-    #[test]
-    fn layout_import_rejects_unknown_credentials_and_unsupported_versions() {
-        let valid = serde_json::to_value(Config::default()).unwrap();
-        for secret_field in ["ha_token", "password", "credentials"] {
-            let mut json = valid.clone();
-            json[secret_field] = serde_json::json!("secret");
-            assert!(decode_layout(&json.to_string()).is_err());
-        }
-        let mut nested_secret = valid.clone();
-        nested_secret["lights"][0]["route"]["token"] = serde_json::json!("secret");
-        assert!(decode_layout(&nested_secret.to_string()).is_err());
-        let mut synthetic_secret = valid.clone();
-        synthetic_secret["source"]["token"] = serde_json::json!("secret");
-        assert!(decode_layout(&synthetic_secret.to_string()).is_err());
-        for version in [0, CONFIG_VERSION + 1] {
-            let mut json = valid.clone();
-            json["version"] = serde_json::json!(version);
-            let error = decode_layout(&json.to_string()).unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("unsupported configuration version")
-            );
-        }
-        let mut embedded_credentials = valid;
-        embedded_credentials["ha_url"] = serde_json::json!("https://user:secret@example.com");
-        assert!(decode_layout(&embedded_credentials.to_string()).is_err());
-    }
-
-    #[test]
-    fn layout_import_validates_routes_before_returning_a_configuration() {
-        let mut config = Config::default();
-        config.lights[0].route = Route::HomeAssistant {
-            entity_id: "light.desk".into(),
-        };
-        assert!(decode_layout(&serde_json::to_string(&config).unwrap()).is_err());
-        config.lights[0].zones = 1;
-        assert!(decode_layout(&serde_json::to_string(&config).unwrap()).is_ok());
-        config.lights[0].route = Route::Wled {
-            host: "desk.local".into(),
-            start: 0,
-            count: 20,
-            device_id: "AA:BB:CC:DD:EE:FF".into(),
-        };
-        let mut duplicate = config.lights[0].clone();
-        duplicate.id = "duplicate-route".into();
-        duplicate.route = Route::Wled {
-            host: "192.168.1.2".into(),
-            start: 19,
-            count: 20,
-            device_id: "aabbccddeeff".into(),
-        };
-        config.lights.push(duplicate);
-        assert!(decode_layout(&serde_json::to_string(&config).unwrap()).is_err());
-    }
-
-    #[test]
-    fn layout_import_enforces_byte_limit_before_parsing() {
-        let mut exactly_at_limit = encode_layout(&Config::default()).unwrap();
-        exactly_at_limit.push_str(&" ".repeat(MAX_CONFIG_BYTES as usize - exactly_at_limit.len()));
-        assert_eq!(decode_layout(&exactly_at_limit).unwrap(), Config::default());
-        exactly_at_limit.push(' ');
-        assert_eq!(
-            decode_layout(&exactly_at_limit).unwrap_err().to_string(),
-            "configuration exceeds 1 MiB"
-        );
-        let malformed = "{".repeat(MAX_CONFIG_BYTES as usize + 1);
-        assert_eq!(
-            decode_layout(&malformed).unwrap_err().to_string(),
-            "configuration exceeds 1 MiB"
-        );
-        let multibyte = "🌈".repeat(MAX_CONFIG_BYTES as usize / 4 + 1);
-        assert!(multibyte.chars().count() < MAX_CONFIG_BYTES as usize);
-        assert_eq!(
-            decode_layout(&multibyte).unwrap_err().to_string(),
-            "configuration exceeds 1 MiB"
-        );
-    }
-
-    #[test]
-    fn config_roundtrip_and_invalid_preservation() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.json");
-        let config = Config::default();
-        save_to(&config, &path).unwrap();
-        assert_eq!(load_from(&path), (config.clone(), None));
-        let invalid = b"{ definitely invalid JSON";
-        fs::write(&path, invalid).unwrap();
-        let (fallback, warning) = load_from(&path);
-        assert_eq!(fallback, Config::default());
-        assert!(warning.unwrap().contains("preserved"));
-        assert_eq!(fs::read(&path).unwrap(), invalid);
-        let mut invalid_config = config;
-        invalid_config.fps = 0;
-        assert!(save_to(&invalid_config, &path).is_err());
-        assert_eq!(fs::read(&path).unwrap(), invalid);
-        save_to(&fallback, &path).unwrap();
-        assert_eq!(load_from(&path), (fallback, None));
-        let backups: Vec<_> = fs::read_dir(directory.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| {
-                path.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .contains(".invalid-")
-            })
-            .collect();
-        assert_eq!(backups.len(), 1);
-        assert_eq!(fs::read(&backups[0]).unwrap(), invalid);
-        save_to(&Config::default(), &path).unwrap();
-        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
-    }
-    #[test]
-    fn future_version_and_credentials_are_rejected() {
-        let mut config = Config::default();
-        config.version += 1;
-        assert!(config.validate().is_err());
-        config.version = CONFIG_VERSION;
-        config.ha_url = "https://user:secret@example.com".into();
-        assert!(config.validate().is_err());
-        let json = serde_json::to_value(Config::default()).unwrap();
-        let mut object = json.as_object().unwrap().clone();
-        object.insert("ha_token".into(), serde_json::json!("secret"));
-        assert!(serde_json::from_value::<Config>(serde_json::Value::Object(object)).is_err());
-    }
-    #[test]
-    fn future_and_oversized_files_survive_recovery_save() {
-        for oversized in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("config.json");
-            let original = if oversized {
-                vec![b' '; MAX_CONFIG_BYTES as usize + 1]
-            } else {
-                let mut future = Config::default();
-                future.version += 1;
-                serde_json::to_vec(&future).unwrap()
-            };
-            fs::write(&path, &original).unwrap();
-            let (fallback, warning) = load_from(&path);
-            assert!(warning.is_some());
-            save_to(&fallback, &path).unwrap();
-            let backup = fs::read_dir(directory.path())
-                .unwrap()
-                .map(|entry| entry.unwrap().path())
-                .find(|candidate| candidate != &path)
-                .unwrap();
-            assert_eq!(fs::read(backup).unwrap(), original);
-        }
-    }
-    #[test]
-    fn legacy_configs_default_to_no_wled_restoration() {
-        let mut json = serde_json::to_value(Config::default()).unwrap();
-        json.as_object_mut().unwrap().remove("restore_wled_state");
-        let config: Config = serde_json::from_value(json).unwrap();
-        assert!(!config.restore_wled_state);
-        assert!(config.validate().is_ok());
-        let mut too_fast = config;
-        too_fast.ha_interval_ms = 499;
-        assert!(too_fast.validate().is_err());
-    }
-    #[test]
-    fn overlapping_routes_are_rejected_but_adjacent_ranges_are_valid() {
-        let mut config = Config::default();
-        config.lights[0].route = Route::Wled {
-            host: "192.168.1.2".into(),
-            start: 0,
-            count: 20,
-            device_id: "wled-1".into(),
-        };
-        let mut second = config.lights[0].clone();
-        second.id = "second".into();
-        second.route = Route::Wled {
-            host: "192.168.1.2".into(),
-            start: 20,
-            count: 20,
-            device_id: "wled-1".into(),
-        };
-        config.lights.push(second);
-        assert!(config.validate().is_ok());
-        if let Route::Wled { start, .. } = &mut config.lights[1].route {
-            *start = 19;
-        }
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn mac_spellings_and_host_aliases_share_overlap_validation() {
-        for (second_host, second_mac) in [
-            ("desk.local", "aabbccddeeff"),
-            ("192.168.1.2", "aa-bb-cc-dd-ee-ff"),
-        ] {
-            let mut config = Config::default();
-            config.lights[0].route = Route::Wled {
-                host: "Desk.local".into(),
-                start: 0,
-                count: 20,
-                device_id: "AA:BB:CC:DD:EE:FF".into(),
-            };
-            let mut second = config.lights[0].clone();
-            second.id = "second".into();
-            second.route = Route::Wled {
-                host: second_host.into(),
-                start: 19,
-                count: 20,
-                device_id: second_mac.into(),
-            };
-            config.lights.push(second);
-            assert!(config.validate().is_err());
-            if let Route::Wled { start, .. } = &mut config.lights[1].route {
-                *start = 20;
-            }
-            assert!(config.validate().is_ok());
-        }
-        assert_eq!(
-            crate::core::canonical_device_id("AA:BB:CC:DD:EE:FF"),
-            "aabbccddeeff"
-        );
-        assert_eq!(crate::core::canonical_host("Desk.LOCAL"), "desk.local");
-    }
-
-    #[test]
-    fn same_host_cannot_claim_conflicting_controller_identities() {
-        let mut config = Config::default();
-        config.lights[0].route = Route::Wled {
-            host: "Desk.local".into(),
-            start: 0,
-            count: 20,
-            device_id: "AA:BB:CC:DD:EE:FF".into(),
-        };
-        let mut second = config.lights[0].clone();
-        second.id = "second".into();
-        second.route = Route::Wled {
-            host: "desk.LOCAL".into(),
-            start: 20,
-            count: 20,
-            device_id: "11:22:33:44:55:66".into(),
-        };
-        config.lights.push(second);
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn loaded_ha_strips_must_sample_one_zone_covering_the_entire_path() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("config.json");
-        let mut config = Config::default();
-        config.lights[0].route = Route::HomeAssistant {
-            entity_id: "light.desk".into(),
-        };
-        // The default strip has eight zones, which must not silently use zone zero.
-        assert!(config.validate().is_err());
-        let invalid = serde_json::to_vec(&config).unwrap();
-        fs::write(&path, &invalid).unwrap();
-        let (fallback, warning) = load_from(&path);
-        assert_eq!(fallback, Config::default());
-        assert!(warning.unwrap().contains("one zone"));
-        assert_eq!(fs::read(&path).unwrap(), invalid);
-        config.lights[0].zones = 1;
-        config.lights[0].shape = Shape::Strip {
-            points: vec![Point { x: 0.0, y: 0.5 }, Point { x: 1.0, y: 0.5 }],
-            radius: 0.2,
-            segment_leds: vec![],
-            reverse: false,
-        };
-        save_to(&config, &path).unwrap();
-        assert_eq!(load_from(&path), (config.clone(), None));
-        let plan = crate::core::SamplingPlan::compile(&config.lights, 10, 2).unwrap();
-        let frame = crate::core::Frame {
-            width: 10,
-            height: 2,
-            pixels: (0..20)
-                .map(|index| if index % 10 < 5 { [0; 3] } else { [255; 3] })
-                .collect(),
-        };
-        assert!((plan.sample(&frame)[0][0][0] - 0.5).abs() < 0.001);
-    }
-}
+mod tests;

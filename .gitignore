@@ -3,3 +3,5 @@
 !docs/evidence/*.log
 /vendor/scap/target
 /vendor/scap/Cargo.lock
+__pycache__/
+*.py[cod]

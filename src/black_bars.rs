@@ -46,11 +46,7 @@ impl Detector {
             self.active = full;
             self.pending = None;
         }
-        if !enabled
-            || frame.width == 0
-            || frame.height == 0
-            || frame.width.checked_mul(frame.height) != Some(frame.pixels.len())
-        {
+        if !enabled || frame.width == 0 || frame.height == 0 || !frame.valid() {
             return frame;
         }
         if let Some(candidate) = detect(&frame) {
@@ -84,10 +80,21 @@ impl Detector {
                     .copied()
             })
             .collect();
+        let taps = frame.taps.as_ref().map(|taps| {
+            (bounds.top..bounds.bottom)
+                .flat_map(|y| {
+                    taps[y * frame.width + bounds.left..y * frame.width + bounds.right]
+                        .iter()
+                        .copied()
+                })
+                .collect()
+        });
         Arc::new(Frame {
             width: bounds.right - bounds.left,
             height: bounds.bottom - bounds.top,
             pixels,
+
+            taps,
         })
     }
 }
@@ -168,7 +175,36 @@ mod tests {
                     }
                 })
                 .collect(),
+
+            taps: None,
         })
+    }
+    #[test]
+    fn crop_keeps_preview_and_tap_cells_aligned() {
+        let mut frame = (*image(0, 10, 0, 10)).clone();
+        frame.taps = Some(
+            (0..frame.width * frame.height)
+                .map(|index| {
+                    std::array::from_fn(|tap| {
+                        [
+                            (index / frame.width) as u8,
+                            (index % frame.width) as u8,
+                            tap as u8,
+                        ]
+                    })
+                })
+                .collect(),
+        );
+        let frame = Arc::new(frame);
+        let now = Instant::now();
+        let mut detector = Detector::default();
+        detector.apply(frame.clone(), true, now);
+        detector.apply(frame.clone(), true, now + Duration::from_millis(200));
+        let cropped = detector.apply(frame, true, now + Duration::from_millis(400));
+        assert_eq!((cropped.width, cropped.height), (160, 70));
+        assert_eq!(cropped.taps.as_ref().unwrap()[0][0], [10, 0, 0]);
+        assert_eq!(cropped.taps.as_ref().unwrap()[159][15], [10, 159, 15]);
+        assert_eq!(cropped.taps.as_ref().unwrap()[160][0], [11, 0, 0]);
     }
     fn settle(detector: &mut Detector, frame: Arc<Frame>, start: Instant) -> Arc<Frame> {
         detector.apply(frame.clone(), true, start);
@@ -199,6 +235,8 @@ mod tests {
             width: 160,
             height: 90,
             pixels: vec![[5; 3]; 160 * 90],
+
+            taps: None,
         });
         assert_eq!(
             detector
@@ -256,6 +294,8 @@ mod tests {
             width: 10,
             height: 10,
             pixels: vec![[200; 3]; 100],
+
+            taps: None,
         });
         assert!(Arc::ptr_eq(
             &resized,

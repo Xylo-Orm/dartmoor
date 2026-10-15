@@ -1,21 +1,25 @@
 [package]
-name = "lumen-desktop"
+name = "dartmoor"
+default-run = "dartmoor"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 description = "Desktop color synchronization for WLED and Home Assistant"
 
+[lib]
+name = "lumen_desktop"
+
 [dependencies]
 anyhow = "1.0"
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 scap = { path = "vendor/scap" }
-tokio = { version = "1.48", features = ["rt-multi-thread", "macros", "net", "time", "sync", "test-util"] }
+tokio = { version = "1.48", features = ["rt-multi-thread", "macros", "net", "time", "sync", "test-util", "process", "io-util"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["raw_value"] }
 rustfft = "6.4"
 directories = "6"
 tempfile = "3"

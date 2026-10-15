@@ -78,6 +78,8 @@ pub fn synthetic_frame(t: f32) -> Frame {
                 ]
             })
             .collect(),
+
+        taps: None,
     }
 }
 impl CaptureSource for Synthetic {
@@ -103,7 +105,12 @@ impl CaptureSource for Desktop {
         self.idle = false;
         match self.capturer.get_next_frame_timeout(timeout)? {
             Some(v) => {
-                let frame = normalize_capture(v)?;
+                let kind = if cfg!(target_os = "linux") {
+                    NormalizationKind::TapGrid
+                } else {
+                    NormalizationKind::Native
+                };
+                let frame = normalize_capture(v, kind)?;
                 self.idle = frame.is_none();
                 Ok(frame)
             }
@@ -186,11 +193,22 @@ pub fn open(selection: &CaptureSelection, fps: u32) -> Result<Box<dyn CaptureSou
 /// turn an ordinary unchanged desktop into a malformed-buffer error. Do not
 /// treat other malformed frames as idle. Desktop exposes this explicit signal
 /// through `confirms_idle`, separately from a retrieval timeout.
-fn normalize_capture(frame: scap::frame::Frame) -> Result<Option<Frame>> {
+#[derive(Clone, Copy)]
+enum NormalizationKind {
+    Native,
+    TapGrid,
+}
+fn normalize_capture(frame: scap::frame::Frame, kind: NormalizationKind) -> Result<Option<Frame>> {
     if matches!(&frame, scap::frame::Frame::BGRA(frame)
         if frame.width == 0 && frame.height == 0 && frame.data.is_empty())
     {
         return Ok(None);
+    }
+    if matches!(kind, NormalizationKind::TapGrid) {
+        if let scap::frame::Frame::RGB(rgb) = frame {
+            return tap_grid_frame(&rgb.data, rgb.width, rgb.height).map(Some);
+        }
+        bail!("Mapped capture returned unexpected pixel format");
     }
     normalize(frame).map(Some)
 }
@@ -224,15 +242,76 @@ fn reduce_mapped(
     order: [usize; 3],
     stride: usize,
 ) -> Option<scap::frame::Frame> {
-    let frame = reduce_rows(bytes, w, h, channels, order, stride).ok()?;
+    let (ow, oh, taps) = extract_taps(bytes, w, h, channels, order, stride).ok()?;
+    let mut data = vec![0u8; ow * oh * 16 * 3];
+    for y in 0..oh {
+        for x in 0..ow {
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let src = taps[y * ow + x][sy * 4 + sx];
+                    let dst = ((y * 4 + sy) * (ow * 4) + x * 4 + sx) * 3;
+                    data[dst..dst + 3].copy_from_slice(&src);
+                }
+            }
+        }
+    }
     Some(scap::frame::Frame::RGB(scap::frame::RGBFrame {
         display_time: 0,
-        width: frame.width as i32,
-        height: frame.height as i32,
-        data: frame.pixels.into_iter().flatten().collect(),
+        width: (ow * 4) as i32,
+        height: (oh * 4) as i32,
+        data,
     }))
 }
 
+fn tap_grid_frame(bytes: &[u8], w: i32, h: i32) -> Result<Frame> {
+    if w <= 0
+        || h <= 0
+        || w % 4 != 0
+        || h % 4 != 0
+        || w as usize > WIDTH * 4
+        || h as usize > HEIGHT * 4
+        || bytes.len() != w as usize * h as usize * 3
+    {
+        bail!("Invalid mapped tap grid");
+    }
+    let (ow, oh) = (w as usize / 4, h as usize / 4);
+    let taps = (0..oh)
+        .flat_map(|y| (0..ow).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            std::array::from_fn(|i| {
+                let base = ((y * 4 + i / 4) * (ow * 4) + x * 4 + i % 4) * 3;
+                bytes[base..base + 3].try_into().unwrap()
+            })
+        })
+        .collect();
+    Ok(frame_from_taps(ow, oh, taps))
+}
+
+fn frame_from_taps(width: usize, height: usize, taps: Vec<[[u8; 3]; 16]>) -> Frame {
+    let linear = linear_table();
+    let pixels = taps
+        .iter()
+        .map(|group| {
+            let mut sum = [0.0; 3];
+            for tap in group {
+                for c in 0..3 {
+                    sum[c] += linear[tap[c] as usize];
+                }
+            }
+            crate::core::encode(sum.map(|v| v / 16.0), 1.0)
+        })
+        .collect();
+    Frame {
+        width,
+        height,
+        pixels,
+        taps: Some(taps),
+    }
+}
+fn linear_table() -> &'static [f32; 256] {
+    static LINEAR: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    LINEAR.get_or_init(|| std::array::from_fn(|i| crate::core::srgb_to_linear(i as u8)))
+}
 fn reduce_rows(
     bytes: &[u8],
     w: i32,
@@ -241,6 +320,18 @@ fn reduce_rows(
     order: [usize; 3],
     stride: usize,
 ) -> Result<Frame> {
+    let (ow, oh, taps) = extract_taps(bytes, w, h, channels, order, stride)?;
+    Ok(frame_from_taps(ow, oh, taps))
+}
+type TapGroups = Vec<[[u8; 3]; 16]>;
+fn extract_taps(
+    bytes: &[u8],
+    w: i32,
+    h: i32,
+    channels: usize,
+    order: [usize; 3],
+    stride: usize,
+) -> Result<(usize, usize, TapGroups)> {
     if w <= 0 || h <= 0 {
         bail!("Invalid capture dimensions");
     }
@@ -252,28 +343,10 @@ fn reduce_rows(
         || h > 32768
         || channels == 0
         || order.iter().any(|c| *c >= channels)
-        || stride < w * channels
+        || stride < w.saturating_mul(channels)
         || span.is_none_or(|span| span > bytes.len())
     {
         bail!("Capture buffer size does not match dimensions");
-    }
-    // Linux has already applied this exact kernel while the PipeWire buffer
-    // was borrowed. Preserve its small RGB output without filtering twice.
-    if w <= WIDTH && h <= HEIGHT && channels == 3 && order == [0, 1, 2] {
-        let pixels = (0..h)
-            .flat_map(|y| {
-                bytes[y * stride..y * stride + w * 3]
-                    .as_chunks::<3>()
-                    .0
-                    .iter()
-                    .copied()
-            })
-            .collect();
-        return Ok(Frame {
-            width: w,
-            height: h,
-            pixels,
-        });
     }
     let scale = (WIDTH as f64 / w as f64)
         .min(HEIGHT as f64 / h as f64)
@@ -282,38 +355,64 @@ fn reduce_rows(
         (w as f64 * scale).round().max(1.0) as usize,
         (h as f64 * scale).round().max(1.0) as usize,
     );
-    // A fixed 4x4 stratified kernel bounds CPU work regardless of source size.
-    // Average in linear light; the sampling core decodes this sRGB small image.
-    static LINEAR: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
-    let linear =
-        LINEAR.get_or_init(|| std::array::from_fn(|i| crate::core::srgb_to_linear(i as u8)));
-    let mut pixels = Vec::with_capacity(ow * oh);
+    let mut taps = Vec::with_capacity(ow * oh);
     for y in 0..oh {
         for x in 0..ow {
-            let mut sum = [0.0; 3];
-            for sy in 0..4 {
-                for sx in 0..4 {
-                    let px = ((x * 4 + sx) * w / (ow * 4)).min(w - 1);
-                    let py = ((y * 4 + sy) * h / (oh * 4)).min(h - 1);
-                    let base = py * stride + px * channels;
-                    for c in 0..3 {
-                        sum[c] += linear[bytes[base + order[c]] as usize];
-                    }
-                }
-            }
-            pixels.push(crate::core::encode(sum.map(|v| v / 16.0), 1.0));
+            taps.push(std::array::from_fn(|i| {
+                let (sx, sy) = (i % 4, i / 4);
+                let px = if w <= WIDTH && h <= HEIGHT {
+                    x
+                } else {
+                    ((x * 4 + sx) * w / (ow * 4)).min(w - 1)
+                };
+                let py = if w <= WIDTH && h <= HEIGHT {
+                    y
+                } else {
+                    ((y * 4 + sy) * h / (oh * 4)).min(h - 1)
+                };
+                let base = py * stride + px * channels;
+                [
+                    bytes[base + order[0]],
+                    bytes[base + order[1]],
+                    bytes[base + order[2]],
+                ]
+            }));
         }
     }
-    Ok(Frame {
-        width: ow,
-        height: oh,
-        pixels,
-    })
+    Ok((ow, oh, taps))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn competing_capture_taps_survive_gray_preview() {
+        let mut packed = Vec::new();
+        for _y in 0..4 {
+            for x in 0..4 {
+                packed.extend(if x < 2 { [255, 0, 0] } else { [0, 255, 255] });
+            }
+        }
+        let frame = reduce(&packed, 4, 4, 3, [0, 1, 2]).unwrap();
+        assert_eq!((frame.width, frame.height), (4, 4));
+        assert_eq!(frame.taps.as_ref().unwrap()[0], [[255, 0, 0]; 16]);
+        let mut large = Vec::new();
+        for _y in 0..90 {
+            for x in 0..640 {
+                large.extend(if x % 4 < 2 {
+                    [255, 0, 0]
+                } else {
+                    [0, 255, 255]
+                });
+            }
+        }
+        let frame = reduce(&large, 640, 90, 3, [0, 1, 2]).unwrap();
+        let taps = &frame.taps.as_ref().unwrap()[0];
+        assert!(taps.contains(&[255, 0, 0]));
+        assert!(taps.contains(&[0, 255, 255]));
+        assert!((frame.pixels[0][0] as i16 - frame.pixels[0][1] as i16).abs() <= 1);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn mapped_reduction_matches_packed_pixels_for_padding_and_channel_orders() {
@@ -337,8 +436,11 @@ mod tests {
             let scap::frame::Frame::RGB(ref output) = native else {
                 panic!("expected RGB")
             };
-            assert!(output.data.len() <= WIDTH * HEIGHT * 3);
-            let actual = normalize(native).unwrap();
+            assert!(output.data.len() <= WIDTH * HEIGHT * 16 * 3);
+            let scap::frame::Frame::RGB(rgb) = native else {
+                unreachable!()
+            };
+            let actual = tap_grid_frame(&rgb.data, rgb.width, rgb.height).unwrap();
             assert_eq!(
                 (actual.width, actual.height),
                 (expected.width, expected.height)
@@ -350,32 +452,38 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "release-mode capture CPU benchmark"]
     fn benchmark_mapped_capture_reduction() {
         let (w, h) = (3840, 2160);
         let pixels: Vec<u8> = (0..w * h * 4).map(|i| (i % 251) as u8).collect();
-        let iterations = 100;
-        let start = Instant::now();
-        for _ in 0..iterations {
-            std::hint::black_box(
-                reduce(&pixels.clone(), w as i32, h as i32, 4, [2, 1, 0]).unwrap(),
-            );
+        let run = || {
+            let grid = reduce_mapped(&pixels, w as i32, h as i32, 4, [2, 1, 0], w * 4).unwrap();
+            let scap::frame::Frame::RGB(rgb) = grid else {
+                unreachable!()
+            };
+            std::hint::black_box(tap_grid_frame(&rgb.data, rgb.width, rgb.height).unwrap());
+        };
+        for _ in 0..30 {
+            run();
         }
-        let old = start.elapsed();
-        let start = Instant::now();
-        for _ in 0..iterations {
-            std::hint::black_box(
-                normalize(reduce_mapped(&pixels, w as i32, h as i32, 4, [2, 1, 0], w * 4).unwrap())
-                    .unwrap(),
-            );
+        let mut durations = Vec::with_capacity(300);
+        for _ in 0..300 {
+            let start = Instant::now();
+            run();
+            durations.push(start.elapsed().as_secs_f64() * 1000.0);
         }
+        durations.sort_by(f64::total_cmp);
         println!(
-            "4K buffer + reduction: old {:.3} ms/frame; mapped {:.3} ms/frame; transferred {} -> {} bytes (excludes compositor readback)",
-            old.as_secs_f64() * 1000.0 / iterations as f64,
-            start.elapsed().as_secs_f64() * 1000.0 / iterations as f64,
+            "4K source to mapped tap grid to preview: mean {:.3}ms p50 {:.3}ms p95 {:.3}ms p99 {:.3}ms max {:.3}ms; payload {} -> {} bytes; no compositor/readback",
+            durations.iter().sum::<f64>() / durations.len() as f64,
+            durations[150],
+            durations[285],
+            durations[297],
+            durations[299],
             pixels.len(),
-            WIDTH * HEIGHT * 3
+            WIDTH * HEIGHT * 16 * 3
         );
     }
     #[test]
@@ -396,12 +504,19 @@ mod tests {
                 data,
             })
         };
-        assert!(normalize_capture(bgra(0, 0, vec![])).unwrap().is_none());
-        assert!(normalize_capture(bgra(0, 1, vec![])).is_err());
-        assert!(normalize_capture(bgra(0, 0, vec![0])).is_err());
-        let image = normalize_capture(bgra(1, 1, vec![10, 20, 200, 255]))
-            .unwrap()
-            .unwrap();
+        assert!(
+            normalize_capture(bgra(0, 0, vec![]), NormalizationKind::Native)
+                .unwrap()
+                .is_none()
+        );
+        assert!(normalize_capture(bgra(0, 1, vec![]), NormalizationKind::Native).is_err());
+        assert!(normalize_capture(bgra(0, 0, vec![0]), NormalizationKind::Native).is_err());
+        let image = normalize_capture(
+            bgra(1, 1, vec![10, 20, 200, 255]),
+            NormalizationKind::Native,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(image.pixels, vec![[200, 20, 10]]);
     }
 

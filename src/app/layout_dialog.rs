@@ -28,12 +28,12 @@ impl LayoutDialog {
     pub fn show(&mut self, ui: &mut egui::Ui) -> Option<Config> {
         ui.set_width((ui.ctx().content_rect().width() - 60.0).clamp(240.0, 640.0));
         ui.heading(if self.exporting {
-            "Export layout"
+            "Export configuration"
         } else {
-            "Import layout"
+            "Import configuration"
         });
-        ui.label(if self.exporting {"Copy this JSON to a file or another installation."}else{"Paste a saved layout JSON document. Import replaces the current layout; Undo restores it."});
-        ui.small("Layouts include device addresses and settings. Access tokens stay in the OS credential store.");
+        ui.label(if self.exporting {"Copy this JSON to a file or another installation."}else{"Paste a saved configuration JSON document. Import replaces the current configuration; Undo restores it."});
+        ui.small("Configurations include devices, placement, Video and Music settings. Access tokens stay in the OS credential store.");
         egui::ScrollArea::both()
             .max_height((ui.ctx().content_rect().height() * 0.45).min(360.0))
             .show(ui, |ui| {
@@ -64,7 +64,7 @@ impl LayoutDialog {
                 if ui
                     .add_enabled(
                         !self.json.trim().is_empty(),
-                        egui::Button::new("Use this layout"),
+                        egui::Button::new("Use this configuration"),
                     )
                     .clicked()
                 {

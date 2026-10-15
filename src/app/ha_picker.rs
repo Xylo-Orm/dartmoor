@@ -11,6 +11,8 @@ pub(super) struct HaPicker {
     rows: Vec<Row>,
     selected: HashSet<String>,
     query: String,
+    filtered_query: String,
+    visible: Vec<usize>,
     capacity: usize,
 }
 struct Row {
@@ -63,21 +65,39 @@ impl HaPicker {
                 .cmp(&b.reason.is_some())
                 .then_with(|| a.searchable.cmp(&b.searchable))
         });
+        let visible = (0..rows.len()).collect();
         Self {
             origin,
             rows,
             selected: HashSet::new(),
             query: String::new(),
+            filtered_query: String::new(),
+            visible,
             capacity,
         }
     }
-    fn select_visible(&mut self) {
+    fn update_filter(&mut self) {
+        if self.query == self.filtered_query {
+            return;
+        }
         let query = self.query.trim().to_lowercase();
-        for row in &self.rows {
+        self.visible.clear();
+        self.visible.extend(
+            self.rows
+                .iter()
+                .enumerate()
+                .filter_map(|(index, row)| row.searchable.contains(&query).then_some(index)),
+        );
+        self.filtered_query.clone_from(&self.query);
+    }
+    fn select_visible(&mut self) {
+        self.update_filter();
+        for &index in &self.visible {
             if self.selected.len() >= self.capacity {
                 break;
             }
-            if row.reason.is_none() && row.searchable.contains(&query) {
+            let row = &self.rows[index];
+            if row.reason.is_none() {
                 self.selected.insert(row.light.entity_id.clone());
             }
         }
@@ -100,6 +120,7 @@ impl HaPicker {
                 .char_limit(256)
                 .desired_width(f32::INFINITY),
         );
+        self.update_filter();
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(self.capacity > 0, egui::Button::new("Select visible"))
@@ -111,22 +132,14 @@ impl HaPicker {
                 self.selected.clear();
             }
         });
-        let query = self.query.trim().to_lowercase();
-        let visible: Vec<usize> = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, row)| row.searchable.contains(&query))
-            .map(|(index, _)| index)
-            .collect();
         // Fixed-height, truncated rows keep rendering bounded by the viewport
         // even when a server exposes thousands of lights.
         let row_height = 76.0;
         egui::ScrollArea::vertical()
             .max_height((ui.ctx().content_rect().height() * 0.4).min(320.0))
-            .show_rows(ui, row_height, visible.len(), |ui, range| {
+            .show_rows(ui, row_height, self.visible.len(), |ui, range| {
                 for position in range {
-                    let row = &self.rows[visible[position]];
+                    let row = &self.rows[self.visible[position]];
                     ui.push_id(&row.light.entity_id, |ui| {
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width(), row_height),
@@ -161,7 +174,7 @@ impl HaPicker {
                     });
                 }
             });
-        if visible.is_empty() {
+        if self.visible.is_empty() {
             ui.label("No matching lights. Try another search.");
         }
         ui.separator();
@@ -317,8 +330,23 @@ mod tests {
             names.len()
         );
         picker.query = "Lamp 0999".into();
+        let output = draw(&mut picker);
+        assert_eq!(picker.visible.len(), 1);
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Lamp 0999")
+        }));
         picker.select_visible();
         assert_eq!(picker.chosen().len(), 1);
         assert_eq!(picker.chosen()[0].entity_id, "light.fixture_0999");
+
+        picker.query = "no matching light".into();
+        draw(&mut picker);
+        assert!(picker.visible.is_empty());
+        assert_eq!(picker.chosen().len(), 1);
+
+        picker.query.clear();
+        draw(&mut picker);
+        assert_eq!(picker.visible.len(), 1000);
+        assert_eq!(picker.chosen().len(), 1);
     }
 }

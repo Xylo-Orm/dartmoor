@@ -89,7 +89,9 @@ impl Metrics {
 fn frame_due(deadline: Option<Instant>, now: Instant, interval: Duration) -> bool {
     // Small callback jitter must not turn a negotiated 30 FPS stream into
     // 15 FPS. Accumulate deadlines rather than resetting them on every frame.
-    deadline.is_none_or(|deadline| now + interval.min(Duration::from_millis(1)) >= deadline)
+    deadline.map_or(true, |deadline| {
+        now + interval.min(Duration::from_millis(1)) >= deadline
+    })
 }
 
 fn next_deadline(deadline: Option<Instant>, now: Instant, interval: Duration) -> Instant {

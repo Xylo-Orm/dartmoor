@@ -8,3 +8,6 @@ pub mod editor;
 pub mod engine;
 pub mod music;
 pub mod outputs;
+pub mod video;
+
+pub mod zigbee;

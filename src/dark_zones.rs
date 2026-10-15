@@ -13,8 +13,8 @@ pub struct DarkZones {
 impl Default for DarkZones {
     fn default() -> Self {
         Self {
-            enabled: false,
-            threshold: 8,
+            enabled: true,
+            threshold: 50,
         }
     }
 }
@@ -41,6 +41,12 @@ pub(crate) struct Detector {
 impl Detector {
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+    pub(crate) fn is_off(&self, light: usize, zone: usize) -> bool {
+        self.zones
+            .get(light)
+            .and_then(|zones| zones.get(zone))
+            .is_some_and(|state| state.off)
     }
 
     /// Force confirmed dark zones and their temporal histories to zero. Never

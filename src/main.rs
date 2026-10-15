@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help") {
         println!(
-            "Lumen Desktop\n  --demo-seconds N       synthetic capture + mock output (no UI)\n  --capture-probe N      real screen capture + mock output (portal permission)\n  --music-demo-seconds N synthetic music pulses + mock output\n  --music-probe N        Linux playback audio + mock output\n  --benchmark           deterministic sampling workload\n  --ui-smoke-seconds N   synthetic native UI, minimize/restore/close\n  --real-capture        with UI smoke: real portal source, mock lights\nWithout flags: native editor. Close stops synchronization."
+            "Dartmoor\n  --demo-seconds N       synthetic capture + mock output (no UI)\n  --capture-probe N      real screen capture + mock output (portal permission)\n  --music-demo-seconds N synthetic music pulses + mock output\n  --music-probe N        Linux playback audio + mock output\n  --benchmark           deterministic sampling workload\n  --ui-smoke-seconds N   synthetic native UI, minimize/restore/close\n  --ui-smoke-workspace NAME select a workspace for the UI smoke probe\n  --real-capture        with UI smoke: real portal source, mock lights\nWithout flags: native editor. Close stops synchronization."
         );
         return Ok(());
     }
@@ -54,13 +54,21 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Lumen Desktop",
+        "Dartmoor",
         options,
         Box::new(move |_| {
-            Ok(Box::new(
+            let mut application =
                 app::App::new(smoke, args.iter().any(|arg| arg == "--real-capture"))
-                    .map_err(|error| error.into_boxed_dyn_error())?,
-            ))
+                    .map_err(|error| error.into_boxed_dyn_error())?;
+            if let Some(index) = args.iter().position(|arg| arg == "--ui-smoke-workspace") {
+                let name = args.get(index + 1).ok_or_else(|| {
+                    anyhow::anyhow!("Missing workspace name").into_boxed_dyn_error()
+                })?;
+                application
+                    .set_smoke_workspace(name)
+                    .map_err(|error| error.into_boxed_dyn_error())?;
+            }
+            Ok(Box::new(application))
         }),
     )
     .map_err(|e| anyhow::anyhow!("Could not start desktop editor: {e}"))
